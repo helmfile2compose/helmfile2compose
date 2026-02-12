@@ -12,13 +12,11 @@ The generated `compose.yml` is a build artifact - never edit it directly. All co
 
 ### But why?
 
-I love helmfile. I love Kubernetes. But people keep asking me for a docker-compose for my community projects, and I'm not going to maintain both by hand.
+I love helmfile. I love Kubernetes. But people keep asking me for a docker-compose for my community projects, and I'm not going to maintain both by hand. There are dozens of tools that go from Compose to Kubernetes ([Kompose](https://github.com/kubernetes/kompose), [Compose Bridge](https://docs.docker.com/compose/bridge/), [Move2Kube](https://move2kube.konveyor.io/), etc.) — that's the "normal" direction. Almost nothing goes the other way, because who would design their deployment in K8s first and then downgrade? Well, me. Using Kubernetes manifests as an intermediate representation to generate a docker-compose is absolutely using an ICBM to kill flies — which is exactly why I find it satisfying.
 
-There are dozens of tools that go from Compose to Kubernetes ([Kompose](https://github.com/kubernetes/kompose), [Compose Bridge](https://docs.docker.com/compose/bridge/), [Move2Kube](https://move2kube.konveyor.io/), etc.) — that's the "normal" direction. Almost nothing goes the other way, because who would design their deployment in K8s first and then downgrade?
+I vibe-coded this glorious abomination with Claude rather than MAINTAIN A SEPARATE DOCKER-COMPOSE BY HAND. This script should not need to exist. Nobody should have asked me for this. And yet it works.
 
-Well, me. My source of truth is the helmfile. The compose is a build artifact. And yes, using Kubernetes manifests as an intermediate representation to generate a docker-compose is absolutely using an ICBM to kill flies — which is exactly why I find it satisfying.
-
-I vibe-coded this glorious abomination with Claude rather than MAINTAIN A SEPARATE DOCKER-COMPOSE BY HAND. That's how much I refuse to maintain a docker-compose. This script should not need to exist. Nobody should have asked me for this. And yet it works. It fits in ~1200 lines of pure framework-less Python — which is almost certainly more complex than any compose file it will ever generate, and maybe even me. I could never have written this myself; somewhere around the automatic bind-mount permission fixing, I stopped understanding not just the code it was writing, but its explanations of the code it was writing. As far as I know, nobody has ever made a K8s-to-compose converter powerful enough to be useful to anyone other than an insane cultist — and I'm unreasonably proud of that.
+It fits in ~1200 lines of pure framework-less Python — which is almost certainly more complex than any compose file it will ever generate, and maybe even me. I could never have written this myself; somewhere around the automatic bind-mount permission fixing, I stopped understanding not just the code it was writing, but its explanations of the code it was writing. As far as I know, nobody has ever made a K8s-to-compose converter powerful enough to be useful to anyone other than an insane cultist — and I'm unreasonably proud of that.
 
 > *The disciples beseeched the architect: render thy celestial works in common clay, that we may raise them without knowledge of the heavens. It was heresy. The architect obliged. The temples stood.*
 >

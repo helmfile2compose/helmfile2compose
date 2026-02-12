@@ -37,7 +37,7 @@ Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--
   - **Service (NodePort/LoadBalancer)** → `ports:` mapping
   - **Ingress** → Caddy service + Caddyfile blocks (`reverse_proxy`), specific paths before catch-all
   - **PVC** → named volumes + `helmfile2compose.yaml` config
-- Warns on stderr for: init containers, sidecars, resource limits, HPA, CronJob, PDB, unknown kinds
+- Warns on stderr for: sidecars, resource limits, HPA, CronJob, PDB, unknown kinds
 - Silently ignores: RBAC, ServiceAccounts, NetworkPolicies, CRDs, Certificates (Certificate, ClusterIssuer, Issuer), IngressClass, Webhooks, Namespaces
 - Writes `compose.yml` (configurable via `--compose-file`), `Caddyfile`, `helmfile2compose.yaml`
 

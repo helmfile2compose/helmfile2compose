@@ -45,7 +45,7 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir ./compose
 
 ### Output files
 
-- `compose.yml` -- services (incl. Caddy reverse proxy), volumes, network aliases
+- `compose.yml` -- services (incl. Caddy reverse proxy), volumes
 - `Caddyfile` -- reverse proxy config derived from Ingress manifests
 - `helmfile2compose.yaml` -- persistent config (see below)
 - `configmaps/` -- generated files from ConfigMap volume mounts
@@ -56,8 +56,10 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir ./compose
 | K8s kind | Compose equivalent |
 |----------|-------------------|
 | Deployment / StatefulSet | `services:` (image, env, command, volumes, ports) |
+| Job | `services:` with `restart: on-failure` (migrations, superuser creation) |
 | ConfigMap / Secret | Resolved inline into `environment:` + generated as files for volume mounts |
-| Service (ClusterIP) | Network aliases on the compose service |
+| Service (ClusterIP) | Hostname rewriting (K8s Service name → compose service name) |
+| Service (ExternalName) | Resolved through alias chain (e.g. `docs-media` → minio) |
 | Service (NodePort / LoadBalancer) | `ports:` mapping |
 | Ingress | Caddy service + Caddyfile `reverse_proxy` blocks (path-rewrite annotations → `uri strip_prefix`) |
 | PVC | Named volumes in `helmfile2compose.yaml` |
@@ -83,9 +85,9 @@ volumes:
 exclude:
   - prometheus-operator    # skip this workload
 
-replacements:               # string replacements in generated files and env vars
-  - old: 'http://my-svc'
-    new: 'http://my-svc:8080'
+replacements:               # string replacements in generated files and env vars (port remaps are automatic)
+  - old: 'path_style_buckets = false'
+    new: 'path_style_buckets = true'
 
 overrides:                  # shallow merge into generated services
   redis-master:
@@ -110,9 +112,9 @@ services:                   # custom services (not from K8s manifests)
 - **`volume_root`** — base path for volume host mounts (default: `./data`). Bare names in `host_path` are prefixed with this. Paths starting with `./` or `/` are used as-is. Auto-discovered PVCs default to `host_path: <pvc_name>` (resolved via `volume_root`).
 - **`volumes`** — map PVCs to named volumes or host paths.
 - **`exclude`** — skip workloads by name.
-- **`replacements`** — global find/replace in generated ConfigMap/Secret files and env vars. Useful when K8s Services remap ports (e.g. Service port 80 → container port 8080) — internal URLs like `http://my-svc` (implicit port 80) won't resolve in Compose without the actual container port.
+- **`replacements`** — global find/replace in generated ConfigMap/Secret files and env vars. Port remapping is now automatic; still useful for non-port rewrites (e.g. `path_style_buckets`).
 - **`overrides`** — shallow merge into generated services. Set a key to `null` to delete it. Useful for replacing bitnami images with vanilla ones, or injecting env vars.
-- **`services`** — add custom services not derived from K8s manifests. Combined with `restart: on-failure`, useful for one-shot init tasks (e.g. creating S3 buckets) that replace Helm post-install Jobs.
+- **`services`** — add custom services not derived from K8s manifests. Combined with `restart: on-failure`, useful for one-shot init tasks (e.g. creating S3 buckets) that complement converted K8s Jobs.
 - **`$secret:<name>:<key>`** — placeholder syntax in `overrides` and `services` values, resolved from K8s Secret manifests at generation time.
 - **`$volume_root`** — placeholder in `overrides` and `services` values, resolved to the `volume_root` config value.
 - **`caddy_email`** — optional. If set, generates a global Caddy block `{ email <value> }` for automatic HTTPS certificate provisioning.
@@ -130,17 +132,17 @@ Stoatchat-specific quirks handled via config:
 - K8s DNS (`*.svc.cluster.local`) rewritten to compose service names
 - Redis overridden from bitnami to vanilla (`overrides:` + `$secret:` ref)
 - MinIO bucket creation via one-shot `minio-init` service (`services:` + `restart: on-failure`)
-- LiveKit internal URL needs explicit port (`replacements:` — K8s Service port 80 → container 7880)
+- LiveKit internal URL port remapping now automatic (K8s Service port 80 → container 7880)
 - S3 `path_style_buckets` flipped to `true` via `replacements:` (compose DNS can't resolve virtual-hosted bucket URLs)
 
-### [lasuite-platform](https://github.com/baptisterajaut/lasuite-platform)
+### [suite-helmfile](https://github.com/suitenumerique) (La Suite)
 
-Stretch goal. A much larger helmfile (~16 charts) for a collaborative suite. If the converter handles this, it handles anything.
+A larger helmfile (~16 charts) for a collaborative suite (docs, drive, people, keycloak, minio, postgresql, redis). **13 services + 5 init jobs running** via helmfile2compose. Validated automatic alias resolution, port remapping, Job conversion, and K8s variable escaping.
 
 ## Limitations
 
 Not converted (warning emitted):
-- Jobs / CronJobs
+- CronJobs
 - Init containers, sidecars (takes `containers[0]` only)
 - Resource limits / requests, HPA, PDB
 
@@ -157,5 +159,6 @@ Some K8s features don't translate to Compose and may require helmfile-side adjus
 - **hostNetwork** — K8s pods can bind directly to the host network. In Compose, every exposed port must be mapped explicitly. Services relying on hostNetwork need their ports listed in the Service/NodePort manifest or they won't be reachable.
 - **Pod-to-pod networking** — K8s gives each pod an IP; Compose uses a shared bridge network. This mostly works transparently (service names resolve), but multicast/broadcast or raw IP assumptions won't.
 - **S3 virtual-hosted style** — AWS SDKs default to virtual-hosted bucket URLs (`bucket-name.s3:9000`). Compose DNS can't resolve dotted hostnames as aliases. Configure your app to use path-style access (`s3:9000/bucket-name`) and use a `replacement` to flip the setting.
-- **Service port remapping** — K8s Services can remap ports (Service:80 → Pod:8080). In Compose there's no Service layer, so internal URLs using implicit port 80 won't work. Use `replacements:` to inject the actual container port.
-- **Helm post-install Jobs** — Jobs that initialize state (create buckets, run migrations) don't convert. Use the `services:` config section with `restart: on-failure` as a retry-until-ready pattern.
+- **Service port remapping** — Now automatic. K8s Service port → container port rewriting happens in env vars, configmap files, and Caddyfile upstreams.
+- **K8s `$(VAR)` in commands** — Kubelet-style variable interpolation in container command/args is now resolved at generation time.
+- **Shell `$VAR` escaping** — Shell variable references in command/entrypoint are escaped (`$$`) so compose doesn't substitute them from host env.

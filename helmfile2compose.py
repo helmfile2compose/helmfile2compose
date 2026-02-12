@@ -31,7 +31,7 @@ _SECRET_REF_RE = re.compile(r'\$secret:([^:]+):([^:}\s]+)')
 
 # K8s kinds we warn about (not convertible to compose)
 UNSUPPORTED_KINDS = (
-    "CronJob", "Job", "HorizontalPodAutoscaler", "PodDisruptionBudget",
+    "CronJob", "HorizontalPodAutoscaler", "PodDisruptionBudget",
 )
 
 # K8s kinds silently ignored (no compose equivalent, no useful warning)
@@ -45,7 +45,7 @@ IGNORED_KINDS = (
 
 # Kinds we actively convert (used to detect truly unknown kinds)
 CONVERTED_KINDS = (
-    "Deployment", "StatefulSet", "ConfigMap", "Secret",
+    "Deployment", "StatefulSet", "Job", "ConfigMap", "Secret",
     "Service", "Ingress", "PersistentVolumeClaim",
 )
 
@@ -147,6 +147,95 @@ def _apply_replacements(text: str, replacements: list[dict]) -> str:
     return text
 
 
+# K8s $(VAR) interpolation in command/args (kubelet resolves these from env vars)
+_K8S_VAR_REF_RE = re.compile(r'\$\(([A-Za-z_][A-Za-z0-9_]*)\)')
+
+_URL_BOUNDARY = r'''(?=[/\s"']|$)'''
+
+
+def _apply_port_remap(text: str, service_port_map: dict) -> str:
+    """Rewrite URLs to use container ports instead of K8s Service ports.
+
+    In K8s, Services remap ports (e.g., Service port 80 → container port 8080).
+    Compose has no service layer, so URLs must use the actual container port.
+    """
+    # Group by service name, skip identity mappings and named ports
+    remaps: dict[str, list[tuple[int, int]]] = {}
+    for (svc_name, svc_port), container_port in service_port_map.items():
+        if not isinstance(svc_port, int) or svc_port == container_port:
+            continue
+        remaps.setdefault(svc_name, []).append((svc_port, container_port))
+
+    for svc_name, port_pairs in remaps.items():
+        escaped = re.escape(svc_name)
+        for svc_port, container_port in port_pairs:
+            # Explicit port: ://host:svc_port or @host:svc_port
+            text = re.sub(
+                r'(?<=[/@])' + escaped + ':' + str(svc_port) + _URL_BOUNDARY,
+                f'{svc_name}:{container_port}',
+                text,
+            )
+            # Implicit port: http://host (80) or https://host (443)
+            if svc_port == 80:
+                text = re.sub(
+                    r'(http://)' + escaped + _URL_BOUNDARY,
+                    r'\g<1>' + f'{svc_name}:{container_port}',
+                    text,
+                )
+            elif svc_port == 443:
+                text = re.sub(
+                    r'(https://)' + escaped + _URL_BOUNDARY,
+                    r'\g<1>' + f'{svc_name}:{container_port}',
+                    text,
+                )
+
+    return text
+
+
+def _apply_alias_map(text: str, alias_map: dict[str, str]) -> str:
+    """Replace K8s Service names with compose service names in hostname positions.
+
+    Matches aliases preceded by :// or @ (URLs, Redis URIs) and followed by
+    / : whitespace, quotes, or end-of-string — so only hostnames are affected,
+    not substrings like bucket names.
+    """
+    for alias, target in alias_map.items():
+        text = re.sub(
+            r'(?<=[/@])'          # preceded by / (in ://) or @
+            + re.escape(alias)
+            + r'''(?=[/:\s"']|$)''',  # followed by / : whitespace quotes or end
+            target,
+            text,
+        )
+    return text
+
+
+def _resolve_k8s_var_refs(obj, env_dict: dict[str, str]):
+    """Replace K8s $(VAR_NAME) references with actual env var values.
+
+    Kubelet resolves $(VAR) in command/args from the container's env vars.
+    Compose doesn't do this, so we inline the values at generation time.
+    """
+    if isinstance(obj, str):
+        return _K8S_VAR_REF_RE.sub(lambda m: env_dict.get(m.group(1), m.group(0)), obj)
+    if isinstance(obj, list):
+        return [_resolve_k8s_var_refs(item, env_dict) for item in obj]
+    return obj
+
+
+def _escape_shell_vars_for_compose(obj):
+    """Escape $VAR references in command/entrypoint so compose doesn't interpolate them.
+
+    Compose treats $VAR and ${VAR} as variable substitution from host env / .env file.
+    Container commands that use shell $VAR expansion need $$ escaping in compose YAML.
+    """
+    if isinstance(obj, str):
+        return re.sub(r'\$(?=[A-Za-z_{])', '$$', obj)
+    if isinstance(obj, list):
+        return [_escape_shell_vars_for_compose(item) for item in obj]
+    return obj
+
+
 def _secret_value(secret: dict, key: str) -> str | None:
     """Get a decoded value from a K8s Secret (base64 data or plain stringData)."""
     # stringData is plain text (rare in rendered output, but possible)
@@ -165,7 +254,9 @@ def _secret_value(secret: dict, key: str) -> str | None:
 
 def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str, dict],
                 workload_name: str, warnings: list[str],
-                replacements: list[dict] | None = None) -> list[dict]:
+                replacements: list[dict] | None = None,
+                alias_map: dict[str, str] | None = None,
+                service_port_map: dict | None = None) -> list[dict]:
     """Resolve env and envFrom into a flat list of {name: ..., value: ...}."""
     env_vars: list[dict] = []
 
@@ -233,6 +324,18 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
             f"(*.svc.cluster.local → service name)"
         )
 
+    # Remap K8s Service ports → container ports
+    if service_port_map:
+        for ev in env_vars:
+            if ev["value"] is not None and isinstance(ev["value"], str):
+                ev["value"] = _apply_port_remap(ev["value"], service_port_map)
+
+    # Resolve K8s Service names → compose service names
+    if alias_map:
+        for ev in env_vars:
+            if ev["value"] is not None and isinstance(ev["value"], str):
+                ev["value"] = _apply_alias_map(ev["value"], alias_map)
+
     # Apply user-defined replacements
     if replacements:
         for ev in env_vars:
@@ -247,7 +350,10 @@ def convert_workload(manifest: dict, configmaps: dict[str, dict], secrets: dict[
                      warnings: list[str], output_dir: str = ".",
                      generated_cms: set | None = None,
                      generated_secrets: set | None = None,
-                     replacements: list[dict] | None = None) -> dict | None:
+                     replacements: list[dict] | None = None,
+                     alias_map: dict[str, str] | None = None,
+                     service_port_map: dict | None = None,
+                     restart_policy: str = "always") -> dict | None:
     """Convert a Deployment or StatefulSet to a docker-compose service definition."""
     meta = manifest.get("metadata", {})
     name = meta.get("name", "unknown")
@@ -276,24 +382,29 @@ def convert_workload(manifest: dict, configmaps: dict[str, dict], secrets: dict[
             warnings.append(f"init container '{ic.get('name', '?')}' on {full} ignored — not supported")
 
     container = containers[0]
-    svc = {"restart": "always"}
+    svc = {"restart": restart_policy}
 
     # Image
     image = container.get("image")
     if image:
         svc["image"] = image
 
-    # Command / entrypoint
-    if "command" in container:
-        svc["entrypoint"] = container["command"]
-    if "args" in container:
-        svc["command"] = container["args"]
-
-    # Environment
+    # Environment (resolve before command so $(VAR) refs can be inlined)
     env_list = resolve_env(container, configmaps, secrets, full, warnings,
-                           replacements=replacements)
-    if env_list:
-        svc["environment"] = {e["name"]: str(e["value"]) if e["value"] is not None else "" for e in env_list}
+                           replacements=replacements, alias_map=alias_map,
+                           service_port_map=service_port_map)
+    env_dict = {e["name"]: str(e["value"]) if e["value"] is not None else "" for e in env_list}
+
+    # Command / entrypoint: resolve K8s $(VAR) refs, then escape $VAR for compose
+    if "command" in container:
+        resolved = _resolve_k8s_var_refs(container["command"], env_dict)
+        svc["entrypoint"] = _escape_shell_vars_for_compose(resolved)
+    if "args" in container:
+        resolved = _resolve_k8s_var_refs(container["args"], env_dict)
+        svc["command"] = _escape_shell_vars_for_compose(resolved)
+
+    if env_dict:
+        svc["environment"] = env_dict
 
     # Ports — only expose if matching K8s Service is NodePort/LoadBalancer
     container_ports = container.get("ports", [])
@@ -309,14 +420,11 @@ def convert_workload(manifest: dict, configmaps: dict[str, dict], secrets: dict[
                                          configmaps=configmaps, secrets=secrets,
                                          output_dir=output_dir, generated_cms=generated_cms,
                                          generated_secrets=generated_secrets,
-                                         replacements=replacements)
+                                         replacements=replacements,
+                                         alias_map=alias_map,
+                                         service_port_map=service_port_map)
     if svc_volumes:
         svc["volumes"] = svc_volumes
-
-    # Network aliases from K8s Services selecting this workload
-    aliases = _get_network_aliases(name, meta.get("labels", {}), services_by_selector)
-    if aliases:
-        svc["networks"] = {"default": {"aliases": aliases}}
 
     # Resource limits warning
     resources = container.get("resources", {})
@@ -371,9 +479,58 @@ def _get_network_aliases(workload_name: str, workload_labels: dict,
     return aliases
 
 
+def _build_alias_map(manifests: dict, services_by_selector: dict) -> dict[str, str]:
+    """Build a map of K8s Service names → compose service names.
+
+    Covers two cases:
+    - ClusterIP services whose name differs from the workload they select
+    - ExternalName services that alias another service
+    """
+    alias_map: dict[str, str] = {}
+
+    # Index workload labels → workload name
+    workload_labels_map: list[tuple[dict, str]] = []
+    for kind in ("Deployment", "StatefulSet"):
+        for m in manifests.get(kind, []):
+            wl_name = m.get("metadata", {}).get("name", "")
+            wl_labels = m.get("metadata", {}).get("labels", {})
+            workload_labels_map.append((wl_labels, wl_name))
+
+    # ClusterIP services whose name differs from the workload
+    for svc_name, svc_info in services_by_selector.items():
+        selector = svc_info.get("selector", {})
+        if not selector:
+            continue
+        for wl_labels, wl_name in workload_labels_map:
+            if all(wl_labels.get(k) == v for k, v in selector.items()):
+                if svc_name != wl_name:
+                    alias_map[svc_name] = wl_name
+                break
+
+    # ExternalName services: resolve target → compose service name
+    for svc_manifest in manifests.get("Service", []):
+        spec = svc_manifest.get("spec", {})
+        if spec.get("type") != "ExternalName":
+            continue
+        svc_name = svc_manifest.get("metadata", {}).get("name", "")
+        external = spec.get("externalName", "")
+        # Strip .svc.cluster.local to get the K8s service name
+        target = _K8S_DNS_RE.sub(r'\1', external)
+        # Resolve through alias_map or services_by_selector
+        compose_name = alias_map.get(target, target)
+        # Only if it resolves to a known compose service (workload)
+        known_workloads = {wl_name for _, wl_name in workload_labels_map}
+        if compose_name in known_workloads:
+            alias_map[svc_name] = compose_name
+
+    return alias_map
+
+
 def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
                               generated_cms: set, warnings: list[str],
-                              replacements: list[dict] | None = None) -> str:
+                              replacements: list[dict] | None = None,
+                              alias_map: dict[str, str] | None = None,
+                              service_port_map: dict | None = None) -> str:
     """Write ConfigMap data entries as files. Returns the directory path (relative)."""
     rel_dir = os.path.join("configmaps", cm_name)
     abs_dir = os.path.join(output_dir, rel_dir)
@@ -386,6 +543,10 @@ def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
                 warnings.append(
                     f"ConfigMap '{cm_name}' key '{key}': rewrote {count} K8s DNS reference(s)"
                 )
+            if service_port_map:
+                rewritten = _apply_port_remap(rewritten, service_port_map)
+            if alias_map:
+                rewritten = _apply_alias_map(rewritten, alias_map)
             if replacements:
                 rewritten = _apply_replacements(rewritten, replacements)
             file_path = os.path.join(abs_dir, key)
@@ -434,7 +595,9 @@ def _convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: se
                            configmaps: dict | None = None, secrets: dict | None = None,
                            output_dir: str = ".", generated_cms: set | None = None,
                            generated_secrets: set | None = None,
-                           replacements: list[dict] | None = None) -> list[str]:
+                           replacements: list[dict] | None = None,
+                           alias_map: dict[str, str] | None = None,
+                           service_port_map: dict | None = None) -> list[str]:
     """Convert volumeMounts to docker-compose volume strings."""
     # Build a map of volume name → volume source
     vol_map = {}
@@ -486,7 +649,9 @@ def _convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: se
                 continue
             cm_dir = _generate_configmap_files(cm_name, cm.get("data", {}),
                                                output_dir, generated_cms, warnings,
-                                               replacements=replacements)
+                                               replacements=replacements,
+                                               alias_map=alias_map,
+                                               service_port_map=service_port_map)
             sub_path = vm.get("subPath")
             if sub_path:
                 result.append(f"{cm_dir}/{sub_path}:{mount_path}:ro")
@@ -570,7 +735,8 @@ def _extract_strip_prefix(annotations: dict, path: str) -> str | None:
     return None
 
 
-def convert_ingress(manifest: dict, service_port_map: dict, warnings: list[str]) -> list[dict]:
+def convert_ingress(manifest: dict, service_port_map: dict, warnings: list[str],
+                    alias_map: dict[str, str] | None = None) -> list[dict]:
     """Convert Ingress to Caddyfile entries."""
     entries = []
     meta = manifest.get("metadata", {})
@@ -599,6 +765,9 @@ def convert_ingress(manifest: dict, service_port_map: dict, warnings: list[str])
                 svc_name = backend.get("serviceName", "")
                 svc_port = backend.get("servicePort", 80)
 
+            # Resolve K8s Service name → compose service name
+            compose_name = (alias_map or {}).get(svc_name, svc_name)
+
             # Resolve to container port (Service port → targetPort → containerPort)
             container_port = service_port_map.get((svc_name, svc_port), svc_port)
 
@@ -607,7 +776,7 @@ def convert_ingress(manifest: dict, service_port_map: dict, warnings: list[str])
             entries.append({
                 "host": host,
                 "path": path,
-                "upstream": f"{svc_name}:{container_port}",
+                "upstream": f"{compose_name}:{container_port}",
                 "scheme": scheme,
                 "strip_prefix": strip_prefix,
             })
@@ -685,6 +854,12 @@ def convert(manifests: dict[str, list[dict]], config: dict,
     # User-defined string replacements (applied to env vars and generated files)
     replacements = config.get("replacements", [])
 
+    # Build alias map: K8s Service names → compose service names
+    alias_map = _build_alias_map(manifests, services_by_selector)
+
+    # Build port map: (K8s Service, port) → container port
+    service_port_map = _build_service_port_map(manifests, services_by_selector)
+
     # Convert workloads
     for kind in ("Deployment", "StatefulSet"):
         for m in manifests.get(kind, []):
@@ -693,14 +868,30 @@ def convert(manifests: dict[str, list[dict]], config: dict,
                                       output_dir=output_dir,
                                       generated_cms=generated_cms,
                                       generated_secrets=generated_secrets,
-                                      replacements=replacements)
+                                      replacements=replacements,
+                                      alias_map=alias_map,
+                                      service_port_map=service_port_map)
             if result:
                 compose_services.update(result)
 
+    # Convert Jobs (one-shot tasks: restart on-failure)
+    for m in manifests.get("Job", []):
+        result = convert_workload(m, configmaps, secrets, services_by_selector,
+                                  pvc_names, config, warnings,
+                                  output_dir=output_dir,
+                                  generated_cms=generated_cms,
+                                  generated_secrets=generated_secrets,
+                                  replacements=replacements,
+                                  alias_map=alias_map,
+                                  service_port_map=service_port_map,
+                                  restart_policy="on-failure")
+        if result:
+            compose_services.update(result)
+
     # Convert Ingresses (resolve Service ports → container ports)
-    service_port_map = _build_service_port_map(manifests, services_by_selector)
     for m in manifests.get("Ingress", []):
-        caddy_entries.extend(convert_ingress(m, service_port_map, warnings))
+        caddy_entries.extend(convert_ingress(m, service_port_map, warnings,
+                                             alias_map=alias_map))
 
     # Add Caddy reverse proxy service if there are Ingress entries
     if caddy_entries:

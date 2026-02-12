@@ -8,7 +8,7 @@ Lint often: run `pylint helmfile2compose.py` and `pyflakes helmfile2compose.py` 
 
 ## What exists
 
-Single script `helmfile2compose.py` (~925 lines). No packages, no setup.py. Dependency: `pyyaml`.
+Single script `helmfile2compose.py` (~1100 lines). No packages, no setup.py. Dependency: `pyyaml`.
 
 ### CLI
 
@@ -28,12 +28,14 @@ Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--
 - Classifies manifests by `kind`
 - Converts:
   - **Deployment/StatefulSet** → compose `services:` (image, env, command, volumes, ports)
+  - **Job** → compose `services:` with `restart: on-failure` (migrations, superuser creation, etc.)
   - **ConfigMap/Secret** → resolved inline into `environment:` + generated as files for volume mounts (`configmaps/`, `secrets/`)
-  - **Service (ClusterIP)** → network aliases on compose service
+  - **Service (ClusterIP)** → hostname rewriting (K8s Service name → compose service name) in env vars, Caddyfile, configmap files
+  - **Service (ExternalName)** → resolved through alias chain (e.g. `docs-media` → minio FQDN → `minio`)
   - **Service (NodePort/LoadBalancer)** → `ports:` mapping
   - **Ingress** → Caddy service + Caddyfile blocks (`reverse_proxy`), specific paths before catch-all
   - **PVC** → named volumes + `helmfile2compose.yaml` config
-- Warns on stderr for: init containers, sidecars, resource limits, HPA, CronJob, Job, PDB, unknown kinds
+- Warns on stderr for: init containers, sidecars, resource limits, HPA, CronJob, PDB, unknown kinds
 - Silently ignores: RBAC, ServiceAccounts, NetworkPolicies, CRDs, Certificates (Certificate, ClusterIssuer, Issuer), IngressClass, Webhooks, Namespaces
 - Writes `compose.yml` (configurable via `--compose-file`), `Caddyfile`, `helmfile2compose.yaml`
 
@@ -55,9 +57,9 @@ volumes:
     host_path: ./custom    # explicit path, used as-is
 exclude:
   - prometheus-operator    # skip this workload
-replacements:             # string replacements in generated files and env vars
-  - old: 'http://my-svc'
-    new: 'http://my-svc:8080'
+replacements:             # string replacements in generated files and env vars (port remaps are automatic now)
+  - old: 'path_style_buckets = false'
+    new: 'path_style_buckets = true'
 overrides:                # shallow merge into generated services (null deletes key)
   redis-master:
     image: redis:7-alpine
@@ -87,7 +89,7 @@ services:                 # custom services added to compose (not from K8s)
 
 ## Out of scope (MVP)
 
-Jobs/CronJobs, init containers, sidecars (warning only — takes `containers[0]`), resource limits/requests, HPA, PDB, RBAC, ServiceAccounts, NetworkPolicies, probes→healthcheck.
+CronJobs, init containers, sidecars (warning only — takes `containers[0]`), resource limits/requests, HPA, PDB, RBAC, ServiceAccounts, NetworkPolicies, probes→healthcheck.
 
 ## Recent fixes
 
@@ -102,13 +104,16 @@ Jobs/CronJobs, init containers, sidecars (warning only — takes `containers[0]`
 - **Service overrides** — `overrides:` section in config for shallow-merging into generated services. `null` deletes a key. Useful for replacing bitnami images with vanilla ones.
 - **Custom services** — `services:` section for adding non-K8s services (e.g. one-shot init containers like `minio-init`). Combined with `restart: on-failure` for retry-until-ready pattern.
 - **$secret references** — `$secret:<name>:<key>` placeholders in overrides and custom services, resolved from K8s Secret manifests at generation time.
-- **String replacements** — `replacements:` section for global find/replace in generated ConfigMap/Secret files and env vars. Handles K8s Service port remapping (e.g. `http://svc` → `http://svc:8080`).
+- **String replacements** — `replacements:` section for global find/replace in generated ConfigMap/Secret files and env vars. Still useful for non-port rewrites (e.g. `path_style_buckets`).
 - **restart: always** — default for all generated services.
 - **volume_root** — configurable base path for host volumes (default `./data`). Bare `host_path` names are prefixed with it. Auto-discovered PVCs default to `host_path: <pvc_name>`. `$volume_root` placeholder resolved in overrides and custom services.
+- **Service alias resolution** — K8s Services whose name differs from the workload (e.g. `keycloak-keycloakx-http` → `keycloak-keycloakx`) are automatically rewritten in env vars, Caddyfile upstreams, and configmap files. ExternalName services (e.g. `docs-media` → minio) are resolved through the alias chain. No `networks.default.aliases` generated — compatible with nerdctl compose.
+- **Automatic port remapping** — K8s Services remap ports (e.g. port 80 → targetPort 8080). URLs with implicit ports (`http://svc` = port 80) or explicit K8s Service ports are automatically rewritten to use the actual container port. Eliminates manual `replacements` for port mismatches (keycloak 80→8080, livekit 80→7880, etc.).
+- **Job conversion** — K8s Jobs (migrations, superuser creation, etc.) converted to compose services with `restart: on-failure`. One-shot retry-until-ready pattern. K8s-only Jobs (cert-manager, ingress CRDs) should be excluded.
+- **K8s `$(VAR)` resolution** — Kubelet resolves `$(VAR_NAME)` in container command/args from the container's env vars. Now inlined at generation time.
+- **Shell `$VAR` escaping for compose** — Shell variable references (`$VAR`) in command/entrypoint are escaped to `$$VAR` in compose YAML, preventing compose from interpreting them as host variable substitution. The container's shell expands them at runtime from its own environment.
 
 ## Known gaps / next steps
 
-- **K8s Service port remapping** — K8s Services remap ports (e.g. port 80 → targetPort 8080). Internal URLs using implicit port 80 won't work in compose. Handled via manual `replacements:` in config, not auto-detected.
 - **S3 virtual-hosted style** — AWS SDK defaults to virtual-hosted bucket URLs (`bucket.host:port`). Compose DNS can't resolve dotted aliases. Fix app-side with `force_path_style` / `path_style_buckets = true`, then use a `replacement` to flip the value.
 - **ConfigMap/Secret name collisions** — the manifest index is flat (no namespace). If two CMs share a name across namespaces with different content, last-parsed wins. Not a problem for reflector (same content by definition).
-- **Helm post-install Jobs** — Jobs like `minio-post-job` (bucket creation) aren't converted. Use `services:` with `restart: on-failure` for one-shot init tasks.

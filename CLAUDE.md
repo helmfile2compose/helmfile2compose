@@ -66,11 +66,11 @@ Jobs/CronJobs, init containers, sidecars (warning only — takes `containers[0]`
 - **Secret base64 decoding** — K8s `Secret.data` values are base64-encoded. Now decoded before injecting into compose `environment:`. Handles both `data` (base64) and `stringData` (plain).
 - **First-run auto-exclude** — When `helmfile2compose.yaml` doesn't exist, auto-excludes K8s-only workloads (matching `cert-manager`, `ingress`, `reflector` in name) and warns that manual review is needed.
 - **Ingress port resolution** — Ingress backends reference Service ports, but compose talks directly to containers. Now resolves the full chain: Service port → targetPort → containerPort (e.g. livekit Service port 80 → named targetPort `http` → containerPort 7880).
+- **ConfigMap/Secret volume mounts** — ConfigMaps and Secrets referenced as volumes are now generated as files under `configmaps/<name>/` and `secrets/<name>/`, then bind-mounted (with `subPath` and `items` support). Deduplicates across services (e.g. revolt-toml mounted by 8 services, generated once).
+- **K8s DNS rewriting** — `<svc>.<ns>.svc.cluster.local` automatically rewritten to `<svc>` in env var values and generated ConfigMap files. Compose service names already match K8s service names.
+- **Config versioning** — `helmfile2compose.yaml` now includes `helmfile2ComposeVersion: v1` and a repo URL in the header comment.
 
 ## Known gaps / next steps
 
-- **ConfigMap mounted as volume** (e.g. `Revolt.toml` in stoat-platform) — currently skipped silently. Needs a bind-mount or config generation strategy.
-- **Cross-namespace resolution** — helmfile renders per-release in separate namespaces. ConfigMaps/Secrets referenced by workloads in other namespaces (via reflector) won't resolve. May need namespace-aware indexing or the config to bridge the gap.
-- **Stoat-platform specifics** — all apps mount `Revolt.toml` from a ConfigMap (stoatchat-config chart). The compose equivalent is a generated file bind-mounted. This probably needs a dedicated config section rather than generic CM→volume handling.
-- **K8s internal DNS in config values** — e.g. livekit's `LIVEKIT_CONFIG` contains `redis-master.stoatchat-redis.svc.cluster.local` which won't resolve in compose. Needs a rewrite strategy or config override.
+- **ConfigMap/Secret name collisions** — the manifest index is flat (no namespace). If two CMs share a name across namespaces with different content, last-parsed wins. Not a problem for reflector (same content by definition).
 - **Redis start-scripts** — bitnami Redis StatefulSet references `/opt/bitnami/scripts/start-scripts/start-master.sh` injected via ConfigMap. Won't work as-is in compose.

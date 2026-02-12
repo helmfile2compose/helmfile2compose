@@ -49,7 +49,7 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir ./compose
 | K8s kind | Compose equivalent |
 |----------|-------------------|
 | Deployment / StatefulSet | `services:` (image, env, command, volumes, ports) |
-| ConfigMap / Secret | Resolved inline into `environment:` (via `env`, `envFrom`, `valueFrom`) |
+| ConfigMap / Secret | Resolved inline into `environment:` + generated as files for volume mounts |
 | Service (ClusterIP) | Network aliases on the compose service |
 | Service (NodePort / LoadBalancer) | `ports:` mapping |
 | Ingress | Caddyfile `reverse_proxy` blocks |
@@ -60,6 +60,8 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir ./compose
 Created on first run, preserved across re-runs. Edit it to control volume mappings and exclusions.
 
 ```yaml
+helmfile2ComposeVersion: v1
+
 volumes:
   data-postgresql:
     driver: local          # named volume
@@ -76,9 +78,9 @@ On first run, K8s-only workloads (matching `cert-manager`, `ingress`, `reflector
 
 ### [stoatchat-platform](https://github.com/baptisterajaut/stoatchat-platform)
 
-Primary target. A chat platform (Revolt fork) deployed via helmfile: API, events, file server, proxy, web client, MongoDB, Redis, RabbitMQ, MinIO, LiveKit.
+Primary target. A chat platform (Revolt rebrand) deployed via helmfile: API, events, file server, proxy, web client, MongoDB, Redis, RabbitMQ, MinIO, LiveKit.
 
-Stoatchat-specific: all application services mount a `Revolt.toml` config file generated from a ConfigMap. The compose equivalent needs a generated `Revolt.toml` bind-mounted into each service, plus DNS rewrites (K8s internal DNS like `redis-master.stoatchat-redis.svc.cluster.local` won't resolve in compose).
+Stoatchat-specific: all application services mount a `Revolt.toml` config file from a ConfigMap — now auto-generated to `configmaps/revolt-toml/Revolt.toml` and bind-mounted into each service. K8s internal DNS (`*.svc.cluster.local`) is rewritten to compose service names.
 
 ### [lasuite-platform](https://github.com/baptisterajaut/lasuite-platform)
 
@@ -92,4 +94,3 @@ Not converted (warning emitted):
 - Resource limits / requests, HPA, PDB
 - RBAC, ServiceAccounts, NetworkPolicies
 - Probes (no healthcheck generation)
-- ConfigMaps mounted as volumes

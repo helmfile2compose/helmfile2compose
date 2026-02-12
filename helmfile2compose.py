@@ -4,6 +4,7 @@
 import argparse
 import base64
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -59,6 +60,7 @@ def load_config(path: str) -> dict:
             cfg = yaml.safe_load(f) or {}
     else:
         cfg = {}
+    cfg.setdefault("helmfile2ComposeVersion", "v1")
     cfg.setdefault("volumes", {})
     cfg.setdefault("exclude", [])
     return cfg
@@ -66,13 +68,15 @@ def load_config(path: str) -> dict:
 
 def save_config(path: str, config: dict) -> None:
     """Write helmfile2compose.yaml."""
-    header = (
-        "# Generated/maintained by helmfile2compose\n"
-        "# Edit values, do not delete keys\n\n"
-    )
+    header = "# Configuration descriptor for https://github.com/baptisterajaut/helmfile2compose\n\n"
+    # Ensure version key comes first
+    ordered = {"helmfile2ComposeVersion": config.get("helmfile2ComposeVersion", "v1")}
+    for k, v in config.items():
+        if k != "helmfile2ComposeVersion":
+            ordered[k] = v
     with open(path, "w") as f:
         f.write(header)
-        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        yaml.dump(ordered, f, default_flow_style=False, sort_keys=False)
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +86,19 @@ def save_config(path: str, config: dict) -> None:
 def _full_name(manifest: dict) -> str:
     meta = manifest.get("metadata", {})
     return f"{manifest.get('kind', '?')}/{meta.get('name', '?')}"
+
+
+_K8S_DNS_RE = re.compile(
+    r'([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # service name (captured)
+    r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # namespace (discarded)
+    r'svc\.cluster\.local'
+)
+
+
+def rewrite_k8s_dns(text: str) -> tuple[str, int]:
+    """Replace <svc>.<ns>.svc.cluster.local with just <svc>. Returns (text, count)."""
+    result, count = _K8S_DNS_RE.subn(r'\1', text)
+    return result, count
 
 
 def _secret_value(secret: dict, key: str) -> str | None:
@@ -106,7 +123,7 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
     env_vars: list[dict] = []
 
     # Direct env entries
-    for e in container.get("env", []):
+    for e in (container.get("env") or []):
         name = e.get("name", "")
         if "value" in e:
             env_vars.append({"name": name, "value": e["value"]})
@@ -141,7 +158,7 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
                 )
 
     # envFrom entries
-    for ef in container.get("envFrom", []):
+    for ef in (container.get("envFrom") or []):
         if "configMapRef" in ef:
             cm_name = ef["configMapRef"].get("name", "")
             cm = configmaps.get(cm_name, {})
@@ -155,12 +172,28 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
                 if val is not None:
                     env_vars.append({"name": k, "value": val})
 
+    # Rewrite K8s internal DNS in env var values
+    total_rewrites = 0
+    for ev in env_vars:
+        if ev["value"] is not None and isinstance(ev["value"], str):
+            rewritten, count = rewrite_k8s_dns(ev["value"])
+            if count:
+                ev["value"] = rewritten
+                total_rewrites += count
+    if total_rewrites:
+        warnings.append(
+            f"{workload_name}: rewrote {total_rewrites} K8s DNS reference(s) "
+            f"(*.svc.cluster.local → service name)"
+        )
+
     return env_vars
 
 
 def convert_workload(manifest: dict, configmaps: dict[str, dict], secrets: dict[str, dict],
                      services_by_selector: dict, pvc_names: set, config: dict,
-                     warnings: list[str]) -> dict | None:
+                     warnings: list[str], output_dir: str = ".",
+                     generated_cms: set | None = None,
+                     generated_secrets: set | None = None) -> dict | None:
     """Convert a Deployment or StatefulSet to a docker-compose service definition."""
     meta = manifest.get("metadata", {})
     name = meta.get("name", "unknown")
@@ -215,9 +248,12 @@ def convert_workload(manifest: dict, configmaps: dict[str, dict], secrets: dict[
         svc["ports"] = exposed_ports
 
     # Volumes
-    volume_mounts = container.get("volumeMounts", [])
-    pod_volumes = pod_spec.get("volumes", [])
-    svc_volumes = _convert_volume_mounts(volume_mounts, pod_volumes, pvc_names, config, full, warnings)
+    volume_mounts = container.get("volumeMounts") or []
+    pod_volumes = pod_spec.get("volumes") or []
+    svc_volumes = _convert_volume_mounts(volume_mounts, pod_volumes, pvc_names, config, full, warnings,
+                                         configmaps=configmaps, secrets=secrets,
+                                         output_dir=output_dir, generated_cms=generated_cms,
+                                         generated_secrets=generated_secrets)
     if svc_volumes:
         svc["volumes"] = svc_volumes
 
@@ -279,8 +315,63 @@ def _get_network_aliases(workload_name: str, workload_labels: dict,
     return aliases
 
 
+def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
+                              generated_cms: set, warnings: list[str]) -> str:
+    """Write ConfigMap data entries as files. Returns the directory path (relative)."""
+    rel_dir = os.path.join("configmaps", cm_name)
+    abs_dir = os.path.join(output_dir, rel_dir)
+    if cm_name not in generated_cms:
+        generated_cms.add(cm_name)
+        os.makedirs(abs_dir, exist_ok=True)
+        for key, value in cm_data.items():
+            rewritten, count = rewrite_k8s_dns(str(value))
+            if count:
+                warnings.append(
+                    f"ConfigMap '{cm_name}' key '{key}': rewrote {count} K8s DNS reference(s)"
+                )
+            file_path = os.path.join(abs_dir, key)
+            with open(file_path, "w") as f:
+                f.write(rewritten)
+    return f"./{rel_dir}"
+
+
+def _generate_secret_files(sec_name: str, secret: dict, items: list | None,
+                           output_dir: str, generated_secrets: set,
+                           warnings: list[str]) -> str:
+    """Write Secret data entries as files. Returns the directory path (relative)."""
+    rel_dir = os.path.join("secrets", sec_name)
+    abs_dir = os.path.join(output_dir, rel_dir)
+    if sec_name not in generated_secrets:
+        generated_secrets.add(sec_name)
+        os.makedirs(abs_dir, exist_ok=True)
+        # Determine which keys to write
+        if items:
+            keys = [item["key"] for item in items if "key" in item]
+        else:
+            keys = list(secret.get("data", {}).keys()) + list(secret.get("stringData", {}).keys())
+        for key in keys:
+            val = _secret_value(secret, key)
+            if val is None:
+                warnings.append(f"Secret '{sec_name}' key '{key}' could not be decoded — skipped")
+                continue
+            # Determine output filename (items can remap key → path)
+            out_name = key
+            if items:
+                for item in items:
+                    if item.get("key") == key and "path" in item:
+                        out_name = item["path"]
+                        break
+            file_path = os.path.join(abs_dir, out_name)
+            with open(file_path, "w") as f:
+                f.write(val)
+    return f"./{rel_dir}"
+
+
 def _convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set,
-                           config: dict, workload_name: str, warnings: list[str]) -> list[str]:
+                           config: dict, workload_name: str, warnings: list[str],
+                           configmaps: dict | None = None, secrets: dict | None = None,
+                           output_dir: str = ".", generated_cms: set | None = None,
+                           generated_secrets: set | None = None) -> list[str]:
     """Convert volumeMounts to docker-compose volume strings."""
     # Build a map of volume name → volume source
     vol_map = {}
@@ -289,9 +380,11 @@ def _convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: se
         if "persistentVolumeClaim" in v:
             vol_map[vname] = {"type": "pvc", "claim": v["persistentVolumeClaim"].get("claimName", "")}
         elif "configMap" in v:
-            vol_map[vname] = {"type": "configmap", "name": v["configMap"].get("name", "")}
+            vol_map[vname] = {"type": "configmap", "name": v["configMap"].get("name", ""),
+                              "items": v["configMap"].get("items")}
         elif "secret" in v:
-            vol_map[vname] = {"type": "secret", "name": v["secret"].get("secretName", "")}
+            vol_map[vname] = {"type": "secret", "name": v["secret"].get("secretName", ""),
+                              "items": v["secret"].get("items")}
         elif "emptyDir" in v:
             vol_map[vname] = {"type": "emptydir"}
         else:
@@ -320,7 +413,32 @@ def _convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: se
         elif source.get("type") == "emptydir":
             # Use a tmpfs or anonymous volume
             result.append(mount_path)
-        # configmap/secret mounted as volume: skip (env is handled separately)
+        elif source.get("type") == "configmap" and configmaps is not None:
+            cm_name = source["name"]
+            cm = configmaps.get(cm_name)
+            if cm is None:
+                warnings.append(f"ConfigMap '{cm_name}' referenced by {workload_name} not found")
+                continue
+            cm_dir = _generate_configmap_files(cm_name, cm.get("data", {}),
+                                               output_dir, generated_cms, warnings)
+            sub_path = vm.get("subPath")
+            if sub_path:
+                result.append(f"{cm_dir}/{sub_path}:{mount_path}:ro")
+            else:
+                result.append(f"{cm_dir}:{mount_path}:ro")
+        elif source.get("type") == "secret" and secrets is not None:
+            sec_name = source["name"]
+            sec = secrets.get(sec_name)
+            if sec is None:
+                warnings.append(f"Secret '{sec_name}' referenced by {workload_name} not found")
+                continue
+            sec_dir = _generate_secret_files(sec_name, sec, source.get("items"),
+                                             output_dir, generated_secrets, warnings)
+            sub_path = vm.get("subPath")
+            if sub_path:
+                result.append(f"{sec_dir}/{sub_path}:{mount_path}:ro")
+            else:
+                result.append(f"{sec_dir}:{mount_path}:ro")
 
     return result
 
@@ -409,12 +527,15 @@ def convert_ingress(manifest: dict, service_port_map: dict, warnings: list[str])
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def convert(manifests: dict[str, list[dict]], config: dict) -> tuple[dict, list[dict], list[str]]:
+def convert(manifests: dict[str, list[dict]], config: dict,
+            output_dir: str = ".") -> tuple[dict, list[dict], list[str]]:
     """Main conversion: returns (compose_services, caddy_entries, warnings)."""
     warnings: list[str] = []
     compose_services: dict = {}
     caddy_entries: list[dict] = []
     pvc_names: set[str] = set()
+    generated_cms: set[str] = set()
+    generated_secrets: set[str] = set()
 
     # Index ConfigMaps and Secrets by name
     configmaps = {m["metadata"]["name"]: m for m in manifests.get("ConfigMap", [])
@@ -441,7 +562,10 @@ def convert(manifests: dict[str, list[dict]], config: dict) -> tuple[dict, list[
     for kind in ("Deployment", "StatefulSet"):
         for m in manifests.get(kind, []):
             result = convert_workload(m, configmaps, secrets, services_by_selector,
-                                      pvc_names, config, warnings)
+                                      pvc_names, config, warnings,
+                                      output_dir=output_dir,
+                                      generated_cms=generated_cms,
+                                      generated_secrets=generated_secrets)
             if result:
                 compose_services.update(result)
 
@@ -589,7 +713,7 @@ def main():
             )
 
     # Step 4: convert
-    services, caddy_entries, warnings = convert(manifests, config)
+    services, caddy_entries, warnings = convert(manifests, config, output_dir=args.output_dir)
 
     # Step 5: emit warnings
     emit_warnings(warnings)

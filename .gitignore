@@ -2,6 +2,8 @@
 docker-compose.yml
 Caddyfile
 helmfile2compose.yaml
+configmaps/
+secrets/
 
 # Rendered manifests
 .helmfile-rendered/

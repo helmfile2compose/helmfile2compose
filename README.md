@@ -5,6 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.10+-blue)
 ![License](https://img.shields.io/badge/license-public%20domain-brightgreen)
 ![Vibe](https://img.shields.io/badge/vibe-coded-ff69b4)
+![Deity](https://img.shields.io/badge/deity-Yog%20Sa'rath-black)
 
 Convert Kubernetes manifests to `compose.yml` + `Caddyfile`. Not Kubernetes-in-Docker (kind, k3d, minikube...) - no cluster, no kubelet, no shim. A devolution of the power of Kubernetes into the simplicity of compose: real `docker compose up`, real Caddy, plain stupid containers.
 

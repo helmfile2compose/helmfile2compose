@@ -8,7 +8,7 @@ Lint often: run `pylint helmfile2compose.py` and `pyflakes helmfile2compose.py` 
 
 ## What exists
 
-Single script `helmfile2compose.py` (~600 lines). No packages, no setup.py. Dependency: `pyyaml`.
+Single script `helmfile2compose.py` (~750 lines). No packages, no setup.py. Dependency: `pyyaml`.
 
 ### CLI
 
@@ -28,12 +28,13 @@ Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`.
 - Classifies manifests by `kind`
 - Converts:
   - **Deployment/StatefulSet** → compose `services:` (image, env, command, volumes, ports)
-  - **ConfigMap/Secret** → resolved inline into `environment:` (via `env`, `envFrom`, `valueFrom`)
+  - **ConfigMap/Secret** → resolved inline into `environment:` + generated as files for volume mounts (`configmaps/`, `secrets/`)
   - **Service (ClusterIP)** → network aliases on compose service
   - **Service (NodePort/LoadBalancer)** → `ports:` mapping
-  - **Ingress** → Caddyfile blocks (`reverse_proxy`), specific paths before catch-all
+  - **Ingress** → Caddy service + Caddyfile blocks (`reverse_proxy`), specific paths before catch-all
   - **PVC** → named volumes + `helmfile2compose.yaml` config
-- Warns on stderr for: init containers, sidecars, resource limits, HPA, CronJob, Job, PDB, NetworkPolicy, ServiceAccount
+- Warns on stderr for: init containers, sidecars, resource limits, HPA, CronJob, Job, PDB, unknown kinds
+- Silently ignores: RBAC, ServiceAccounts, NetworkPolicies, CRDs, Certificates, Webhooks, Namespaces
 - Writes `docker-compose.yml`, `Caddyfile`, `helmfile2compose.yaml`
 
 ### Config file (`helmfile2compose.yaml`)
@@ -41,6 +42,8 @@ Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`.
 Persistent, re-runnable. User edits are preserved across runs.
 
 ```yaml
+helmfile2ComposeVersion: v1
+name: my-platform
 volumes:
   data-postgresql:
     driver: local          # named volume
@@ -54,7 +57,8 @@ exclude:
 
 - Synthetic multi-doc YAML (Deployment, StatefulSet, ConfigMap, Secret, Service, Ingress, HPA, CronJob)
 - Real `helmfile template` output from `~/stoat-platform` (`helmfile -e local template --output-dir /tmp/h2c-rendered` then `--from-dir`)
-- `docker compose config` validates generated output
+- Real `helmfile template` output from `~/suite-helmfile` (larger helmfile, ~16 charts)
+- `docker compose config` validates generated output for both projects
 
 ## Out of scope (MVP)
 
@@ -73,4 +77,3 @@ Jobs/CronJobs, init containers, sidecars (warning only — takes `containers[0]`
 ## Known gaps / next steps
 
 - **ConfigMap/Secret name collisions** — the manifest index is flat (no namespace). If two CMs share a name across namespaces with different content, last-parsed wins. Not a problem for reflector (same content by definition).
-- **Redis start-scripts** — bitnami Redis StatefulSet references `/opt/bitnami/scripts/start-scripts/start-master.sh` injected via ConfigMap. Won't work as-is in compose.

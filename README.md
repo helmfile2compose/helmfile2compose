@@ -40,9 +40,11 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir ./compose
 
 ### Output files
 
-- `docker-compose.yml` -- services, volumes, network aliases
+- `docker-compose.yml` -- services (incl. Caddy reverse proxy), volumes, network aliases
 - `Caddyfile` -- reverse proxy config derived from Ingress manifests
 - `helmfile2compose.yaml` -- persistent config (see below)
+- `configmaps/` -- generated files from ConfigMap volume mounts
+- `secrets/` -- generated files from Secret volume mounts
 
 ## What it converts
 
@@ -52,7 +54,7 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir ./compose
 | ConfigMap / Secret | Resolved inline into `environment:` + generated as files for volume mounts |
 | Service (ClusterIP) | Network aliases on the compose service |
 | Service (NodePort / LoadBalancer) | `ports:` mapping |
-| Ingress | Caddyfile `reverse_proxy` blocks |
+| Ingress | Caddy service + Caddyfile `reverse_proxy` blocks |
 | PVC | Named volumes in `helmfile2compose.yaml` |
 
 ## Config file (`helmfile2compose.yaml`)
@@ -61,6 +63,7 @@ Created on first run, preserved across re-runs. Edit it to control volume mappin
 
 ```yaml
 helmfile2ComposeVersion: v1
+name: my-platform           # compose project name (default: source dir basename)
 
 volumes:
   data-postgresql:
@@ -92,5 +95,8 @@ Not converted (warning emitted):
 - Jobs / CronJobs
 - Init containers, sidecars (takes `containers[0]` only)
 - Resource limits / requests, HPA, PDB
-- RBAC, ServiceAccounts, NetworkPolicies
 - Probes (no healthcheck generation)
+
+Silently ignored (no compose equivalent):
+- RBAC, ServiceAccounts, NetworkPolicies, CRDs, Certificates, Webhooks
+- Unknown kinds trigger a warning

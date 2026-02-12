@@ -13,6 +13,41 @@ import yaml
 
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Workload name patterns auto-excluded on first run (K8s-only infra)
+AUTO_EXCLUDE_PATTERNS = ("cert-manager", "ingress", "reflector")
+
+# K8s internal DNS → compose service name
+_K8S_DNS_RE = re.compile(
+    r'([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # service name (captured)
+    r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # namespace (discarded)
+    r'svc\.cluster\.local'
+)
+
+# K8s kinds we warn about (not convertible to compose)
+UNSUPPORTED_KINDS = (
+    "CronJob", "Job", "HorizontalPodAutoscaler", "PodDisruptionBudget",
+)
+
+# K8s kinds silently ignored (no compose equivalent, no useful warning)
+IGNORED_KINDS = (
+    "Certificate", "ClusterIssuer", "Issuer",
+    "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding",
+    "CustomResourceDefinition", "IngressClass", "Namespace",
+    "MutatingWebhookConfiguration", "ValidatingWebhookConfiguration",
+    "NetworkPolicy", "ServiceAccount",
+)
+
+# Kinds we actively convert (used to detect truly unknown kinds)
+CONVERTED_KINDS = (
+    "Deployment", "StatefulSet", "ConfigMap", "Secret",
+    "Service", "Ingress", "PersistentVolumeClaim",
+)
+
+
+# ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
 
@@ -86,13 +121,6 @@ def save_config(path: str, config: dict) -> None:
 def _full_name(manifest: dict) -> str:
     meta = manifest.get("metadata", {})
     return f"{manifest.get('kind', '?')}/{meta.get('name', '?')}"
-
-
-_K8S_DNS_RE = re.compile(
-    r'([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # service name (captured)
-    r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # namespace (discarded)
-    r'svc\.cluster\.local'
-)
 
 
 def rewrite_k8s_dns(text: str) -> tuple[str, int]:
@@ -574,24 +602,34 @@ def convert(manifests: dict[str, list[dict]], config: dict,
     for m in manifests.get("Ingress", []):
         caddy_entries.extend(convert_ingress(m, service_port_map, warnings))
 
+    # Add Caddy reverse proxy service if there are Ingress entries
+    if caddy_entries:
+        compose_services["caddy"] = {
+            "image": "caddy:2-alpine",
+            "ports": ["80:80", "443:443"],
+            "volumes": [
+                "./Caddyfile:/etc/caddy/Caddyfile:ro",
+                "caddy-data:/data",
+                "caddy-config:/config",
+            ],
+        }
+
     # Update config with discovered PVCs
     for pvc in sorted(pvc_names):
         if pvc not in config["volumes"]:
             config["volumes"][pvc] = {"driver": "local"}
 
     # Emit warnings for unsupported kinds
-    unsupported = {
-        "CronJob": "not supported",
-        "Job": "not supported",
-        "HorizontalPodAutoscaler": "ignored",
-        "PodDisruptionBudget": "ignored",
-        "NetworkPolicy": "ignored",
-        "ServiceAccount": "ignored",
-    }
-    for kind, reason in unsupported.items():
+    for kind in UNSUPPORTED_KINDS:
         for m in manifests.get(kind, []):
             meta = m.get("metadata", {})
-            warnings.append(f"{kind} '{meta.get('name', '?')}' {reason}")
+            warnings.append(f"{kind} '{meta.get('name', '?')}' not supported")
+
+    # Warn about truly unknown kinds
+    known = set(CONVERTED_KINDS) | set(UNSUPPORTED_KINDS) | set(IGNORED_KINDS)
+    for kind, items in manifests.items():
+        if kind not in known:
+            warnings.append(f"unknown kind '{kind}' ({len(items)} manifest(s)) — skipped")
 
     return compose_services, caddy_entries, warnings
 
@@ -602,13 +640,19 @@ def convert(manifests: dict[str, list[dict]], config: dict,
 
 def write_compose(services: dict, config: dict, output_dir: str) -> None:
     """Write docker-compose.yml."""
-    compose = {"services": services}
+    compose = {}
+    if config.get("name"):
+        compose["name"] = config["name"]
+    compose["services"] = services
 
     # Add top-level named volumes
     named_volumes = {}
     for vol_name, vol_cfg in config.get("volumes", {}).items():
         if isinstance(vol_cfg, dict) and "host_path" not in vol_cfg:
             named_volumes[vol_name] = vol_cfg
+    if "caddy" in services:
+        named_volumes["caddy-data"] = None
+        named_volumes["caddy-config"] = None
     if named_volumes:
         compose["volumes"] = named_volumes
 
@@ -697,13 +741,17 @@ def main():
     first_run = not os.path.exists(config_path)
     config = load_config(config_path)
 
+    # On first run, set project name from source directory
+    if first_run:
+        source_dir = args.helmfile_dir if not args.from_dir else args.from_dir
+        config["name"] = os.path.basename(os.path.realpath(source_dir))
+
     # On first run, auto-exclude K8s-only workloads
     if first_run:
-        k8s_only_patterns = ("cert-manager", "ingress", "reflector")
         for kind in ("Deployment", "StatefulSet"):
             for m in manifests.get(kind, []):
                 name = m.get("metadata", {}).get("name", "")
-                if any(p in name for p in k8s_only_patterns):
+                if any(p in name for p in AUTO_EXCLUDE_PATTERNS):
                     if name not in config["exclude"]:
                         config["exclude"].append(name)
         if config["exclude"]:

@@ -74,80 +74,14 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir ./compose
 
 - `compose.yml` -- services (incl. Caddy reverse proxy), volumes
 - `Caddyfile` -- reverse proxy config derived from Ingress manifests
-- `helmfile2compose.yaml` -- persistent config (see below)
+- `helmfile2compose.yaml` -- persistent config ([reference](docs/architecture.md#config-file-helmfile2composeyaml))
 - `configmaps/` -- generated files from ConfigMap volume mounts
 - `secrets/` -- generated files from Secret volume mounts
 
-## What it converts
+## Documentation
 
-| K8s kind | Compose equivalent |
-|----------|-------------------|
-| Deployment / StatefulSet | `services:` (image, env, command, volumes, ports) |
-| Job | `services:` with `restart: on-failure` (migrations, superuser creation) |
-| ConfigMap / Secret | Resolved inline into `environment:` + generated as files for volume mounts |
-| Service (ClusterIP) | Hostname rewriting (K8s Service name → compose service name) |
-| Service (ExternalName) | Resolved through alias chain (e.g. `docs-media` → minio) |
-| Service (NodePort / LoadBalancer) | `ports:` mapping |
-| Ingress | Caddy service + Caddyfile `reverse_proxy` blocks (path-rewrite annotations → `uri strip_prefix`) |
-| PVC | Named volumes in `helmfile2compose.yaml` |
-
-## Config file (`helmfile2compose.yaml`)
-
-Created on first run, preserved across re-runs. Edit it to control volume mappings and exclusions.
-
-```yaml
-helmfile2ComposeVersion: v1
-name: my-platform           # compose project name (default: source dir basename)
-volume_root: ./data         # prefix for bare host_path names (default: ./data)
-caddy_email: admin@example.com  # optional — for Caddy automatic HTTPS
-
-volumes:
-  data-postgresql:
-    driver: local          # named docker volume
-  myapp-data:
-    host_path: app         # → ./data/app (bare name = volume_root + name)
-  other:
-    host_path: ./custom    # explicit path (starts with ./ or /), used as-is
-
-exclude:
-  - prometheus-operator    # exact name
-  - meet-celery-*          # wildcard (fnmatch syntax)
-
-replacements:               # string replacements in generated files and env vars (port remaps are automatic)
-  - old: 'path_style_buckets = false'
-    new: 'path_style_buckets = true'
-
-overrides:                  # shallow merge into generated services
-  redis-master:
-    image: redis:7-alpine
-    command: ["redis-server", "--requirepass", "$secret:redis:redis-password"]
-    volumes: ["$volume_root/redis:/data"]
-    environment: null       # null deletes the key
-
-services:                   # custom services (not from K8s manifests)
-  minio-init:
-    image: quay.io/minio/mc:latest
-    restart: on-failure
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - mc alias set local http://minio:9000 $secret:minio:rootUser $secret:minio:rootPassword
-        && mc mb --ignore-existing local/revolt-uploads
-```
-
-### Config sections
-
-- **`name`** — compose project name. Auto-set to the source directory basename on first run.
-- **`volume_root`** — base path for volume host mounts (default: `./data`). Bare names in `host_path` are prefixed with this. Paths starting with `./` or `/` are used as-is. Auto-discovered PVCs default to `host_path: <pvc_name>` (resolved via `volume_root`).
-- **`volumes`** — map PVCs to named volumes or host paths.
-- **`exclude`** — skip workloads by name or wildcard pattern (`fnmatch` syntax: `*`, `?`, `[seq]`). Workloads with `replicas: 0` are also auto-skipped.
-- **`replacements`** — global find/replace in generated ConfigMap/Secret files and env vars. Port remapping is now automatic; still useful for non-port rewrites (e.g. `path_style_buckets`).
-- **`overrides`** — shallow merge into generated services. Set a key to `null` to delete it. Useful for replacing bitnami images with vanilla ones, or injecting env vars.
-- **`services`** — add custom services not derived from K8s manifests. Combined with `restart: on-failure`, useful for one-shot init tasks (e.g. creating S3 buckets) that complement converted K8s Jobs.
-- **`$secret:<name>:<key>`** — placeholder syntax in `overrides` and `services` values, resolved from K8s Secret manifests at generation time.
-- **`$volume_root`** — placeholder in `overrides` and `services` values, resolved to the `volume_root` config value.
-- **`caddy_email`** — optional. If set, generates a global Caddy block `{ email <value> }` for automatic HTTPS certificate provisioning.
-
-On first run, K8s-only workloads (matching `cert-manager`, `ingress`, `reflector`) are auto-excluded with a warning to review.
+- **[Architecture](docs/architecture.md)** — pipeline, conversion table, config file reference, K8s vs Compose differences and gotchas
+- **[Usage guide](docs/usage-guide.md)** — day-to-day operations: regenerating, data management, TLS, troubleshooting
 
 ## Target projects
 
@@ -174,27 +108,3 @@ pylint helmfile2compose.py          # 9.57/10
 pyflakes helmfile2compose.py        # clean
 radon cc helmfile2compose.py -a -s  # average B (~6), no D/E/F
 ```
-
-## Limitations
-
-Not converted (warning emitted):
-- CronJobs
-- Init containers, sidecars (takes `containers[0]` only)
-- Resource limits / requests, HPA, PDB
-
-Silently ignored (no compose equivalent):
-- RBAC, ServiceAccounts, NetworkPolicies, CRDs, Certificates (Certificate, ClusterIssuer, Issuer), IngressClass, Webhooks, Namespaces
-- Probes (liveness, readiness, startup) — no healthcheck generation
-- Unknown kinds trigger a warning
-
-### Docker/Compose vs Kubernetes gotchas
-
-Some K8s features don't translate to Compose and may require helmfile-side adjustments for the local environment:
-
-- **Large port ranges** — K8s with `hostNetwork` handles thousands of ports natively. Docker creates one iptables/pf rule per port, so a range like 50000-60000 (e.g. WebRTC) will kill your network stack. Reduce the range in your helmfile local values (e.g. 50000-50100).
-- **hostNetwork** — K8s pods can bind directly to the host network. In Compose, every exposed port must be mapped explicitly. Services relying on hostNetwork need their ports listed in the Service/NodePort manifest or they won't be reachable.
-- **Pod-to-pod networking** — K8s gives each pod an IP; Compose uses a shared bridge network. This mostly works transparently (service names resolve), but multicast/broadcast or raw IP assumptions won't.
-- **S3 virtual-hosted style** — AWS SDKs default to virtual-hosted bucket URLs (`bucket-name.s3:9000`). Compose DNS can't resolve dotted hostnames as aliases. Configure your app to use path-style access (`s3:9000/bucket-name`) and use a `replacement` to flip the setting.
-- **Service port remapping** — Now automatic. K8s Service port → container port rewriting happens in env vars, configmap files, and Caddyfile upstreams.
-- **K8s `$(VAR)` in commands** — Kubelet-style variable interpolation in container command/args is now resolved at generation time.
-- **Shell `$VAR` escaping** — Shell variable references in command/entrypoint are escaped (`$$`) so compose doesn't substitute them from host env.

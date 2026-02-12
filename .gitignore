@@ -1,0 +1,11 @@
+# Generated output
+docker-compose.yml
+Caddyfile
+helmfile2compose.yaml
+
+# Rendered manifests
+.helmfile-rendered/
+
+# Python
+__pycache__/
+*.pyc

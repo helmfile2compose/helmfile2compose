@@ -81,25 +81,23 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir ./compose
 ## Documentation
 
 - **[Architecture](docs/architecture.md)** — pipeline, conversion table, config file reference, K8s vs Compose differences and gotchas
-- **[Usage guide](docs/usage-guide.md)** — day-to-day operations: regenerating, data management, TLS, troubleshooting
+- **[Usage guide](docs/usage-guide.md)** — day-to-day operations: regenerating, data management, troubleshooting
 
-## Target projects
+## Compatible projects
+
+These are the projects that caused this tool to exist — helmfile was the source of truth, then people asked for a docker-compose. Both ship a `generate-compose.sh` that downloads helmfile2compose from a pinned release, and a `helmfile2compose.yaml` template that handles project-specific gotchas (image overrides, volume mappings, port ranges, etc.).
 
 ### [stoatchat-platform](https://github.com/baptisterajaut/stoatchat-platform)
 
-Primary target. A chat platform (Revolt rebrand) deployed via helmfile: API, events, file server, proxy, web client, MongoDB, Redis, RabbitMQ, MinIO, LiveKit. **15/15 services running** via helmfile2compose.
+A chat platform (Revolt fork) deployed via helmfile: API, events, file server, proxy, web client, MongoDB, Redis, RabbitMQ, MinIO, LiveKit. **15 services running** via helmfile2compose.
 
-Stoatchat-specific quirks handled via config:
-- All app services mount `Revolt.toml` from a ConfigMap → auto-generated + bind-mounted
-- K8s DNS (`*.svc.cluster.local`) rewritten to compose service names
-- Redis overridden from bitnami to vanilla (`overrides:` + `$secret:` ref)
-- MinIO bucket creation via one-shot `minio-init` service (`services:` + `restart: on-failure`)
-- LiveKit internal URL port remapping now automatic (K8s Service port 80 → container 7880)
-- S3 `path_style_buckets` flipped to `true` via `replacements:` (compose DNS can't resolve virtual-hosted bucket URLs)
+Notable config: shared `Revolt.toml` ConfigMap across 8 services, bitnami Redis replaced with vanilla via `overrides:`, MinIO bucket init via custom `services:`, S3 path-style via `replacements:`.
 
 ### [suite-helmfile](https://github.com/suitenumerique) (La Suite)
 
-A larger helmfile (~16 charts) for a collaborative suite (docs, drive, meet, people, conversations, keycloak, minio, postgresql, redis, livekit). **22 services + 11 init jobs running** via helmfile2compose. Validated automatic alias resolution, port remapping, Job conversion, K8s variable escaping, wildcard excludes, and replicas:0 auto-skip.
+A collaborative suite (~16 Helm charts): docs, drive, meet, people, conversations, keycloak, minio, postgresql, redis, livekit. **22 services + 11 init jobs running** via helmfile2compose.
+
+Notable config: wildcard excludes, automatic alias resolution across charts, Job conversion for Django migrations, replicas:0 auto-skip for disabled apps.
 
 ## Code quality
 

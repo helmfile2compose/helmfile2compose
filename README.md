@@ -44,6 +44,8 @@ python3 helmfile2compose.py --from-dir /tmp/manifests --output-dir ./compose
 
 The `--helmfile-dir` flag is a convenience shortcut that runs `helmfile template` for you — nothing more.
 
+I named it helmfile2compose because both helmfile and docker-compose share the same purpose: deploying an entire self-contained platform at once. If you're using this script to convert something that isn't self-contained, you are further into the abyss than I ever ventured, and I am certain it will end terribly. Yog Sa'rath, stay away from me.
+
 ## Requirements
 
 - Python 3.10+

@@ -1,6 +1,6 @@
 # Limitations
 
-*We replaced the orchestra conductor with a chimpanzee, and you're surprised the audience needs earplugs.*
+*We replaced the perfectly sane orchestra conductor with a hideously mutated chimpanzee sprouting tentacle appendices, and you're surprised the audience needs earplugs.*
 
 Kubernetes is an orchestrator. Docker Compose is a list of containers. This document covers what gets lost in translation.
 

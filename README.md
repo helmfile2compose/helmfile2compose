@@ -1,6 +1,6 @@
 # helmfile2compose
 
-*For when you maintain a helmfile but people keep asking for a docker-compose.*
+*For when you maintain a helmfile but people keep asking for a docker-compose. I'm pretty sure I now have tentacles on my body*
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue)
 ![License](https://img.shields.io/badge/license-public%20domain-brightgreen)

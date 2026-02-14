@@ -4,6 +4,8 @@ I'm sorry you're here. Truly. If you're reading this, it means you maintain a he
 
 I've been there. Twice. This tool is the scar tissue.
 
+From now on we will call this script **h2c**, because the concept is already mind-numbing enough — reading the full "helmfile2compose" every three words will certainly not help.
+
 > *He who renders the celestial into the mundane does not ascend — he merely ensures that both realms now share his suffering equally.*
 >
 > — *Necronomicon, On the Folly of Downward Translation (probably)*
@@ -90,6 +92,14 @@ If your project uses a different controller, the annotation handling is localize
 - **[lasuite-platform](https://github.com/baptisterajaut/lasuite-platform)** — 22 services + 11 init jobs. The second patient. Tentacles started appearing around the volumeClaimTemplates.
 
 Both ship with `generate-compose.sh` and `helmfile2compose.yaml.template`. Reading their setup is probably more useful than anything I could write here.
+
+## Garbage in, garbage out
+
+h2c does **zero validation** of your helmfile output. If your manifests reference a ConfigMap that doesn't exist, a Secret with a missing key, or a Service pointing at a non-existent Deployment — h2c will crash with an ugly Python traceback, not a helpful error message.
+
+This is by design. Error handling for malformed K8s manifests is not h2c's job — it would massively increase complexity for something that `helmfile lint`, `helm template --validate`, and `kubectl apply --dry-run` already do. h2c assumes its input is valid. If it isn't, the consequences are yours.
+
+**Make sure your helmfile works on a real Kubernetes cluster first.** A real runtime — one with an actual apiserver, actual controllers, actual sanity — should have validated the output before h2c ever sees it. h2c is a downstream consumer, not a linter. Fix your helmfile, re-render, re-convert. Actions, consequences.
 
 ## Final warning
 

@@ -9,8 +9,6 @@
 
 Convert Kubernetes manifests to `compose.yml` + `Caddyfile`. Not Kubernetes-in-Docker (kind, k3d, minikube...) - no cluster, no kubelet, no shim. A devolution of the power of Kubernetes into the simplicity of compose: real `docker compose up`, real Caddy, plain stupid containers.
 
-The generated `compose.yml` is a build artifact - never edit it directly. All configuration goes in `helmfile2compose.yaml`; re-run the script to regenerate.
-
 ### But why?
 
 I love helmfile. I love Kubernetes. But people keep asking me for a docker-compose for my community projects, and I'm not going to maintain both by hand. There are dozens of tools that go from Compose to Kubernetes ([Kompose](https://github.com/kubernetes/kompose), [Compose Bridge](https://docs.docker.com/compose/bridge/), [Move2Kube](https://move2kube.konveyor.io/), etc.) — that's the "normal" direction. Almost nothing goes the other way, because who would design their deployment in K8s first and then downgrade? Well, me. Using Kubernetes manifests as an intermediate representation to generate a docker-compose is absolutely using an ICBM to kill flies — which is exactly why I find it satisfying.

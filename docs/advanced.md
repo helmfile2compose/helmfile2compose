@@ -50,7 +50,7 @@ Sidecars use `container_name` and `network_mode: container:<name>` to share thei
 > "To summon the inexplicable and the unspeakable into the same circle
 > is to ensure that neither shall depart peaceably."
 >
-> — *Necronomicon, On Unnatural Affinities (probably)*
+> — *Necronomicon, On Unnatural Affinities (allegedly)*
 
 To rename a project: edit `name:` in `helmfile2compose.yaml`, delete `compose.yml`, regenerate.
 

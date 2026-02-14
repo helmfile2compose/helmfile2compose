@@ -12,23 +12,23 @@ h2c is converging toward a K8s-to-compose emulator — taking declarative K8s re
 
 **Tier 2 — Ignored.** K8s operational features that don't change what the application *does*, only how K8s manages it. NetworkPolicies, HPA, PDB, RBAC, resource limits/requests, ServiceAccounts. Safe to skip — they affect the cluster's security posture and scaling behavior, not the application's functionality on a single machine.
 
-**Tier 3 — The wall.** Anything that talks to the kube-apiserver at runtime. This is the hard limit. No emulation possible without rebuilding the K8s control plane.
+**Tier 3 — The wall.** Anything that talks to the kube-apiserver at runtime. This was the hard limit. Then someone built a fake apiserver. Consult the [maritime police most wanted list](https://github.com/baptisterajaut/h2c-api) for details.
 
 ### What's behind the wall
 
 - **Operators themselves** — they watch the API for CRDs, reconcile state. But we don't need to *run* them, just emulate their output (tier 1).
-- **Apps that use the K8s API** — service discovery via API instead of DNS, leader election via Lease objects, dynamic config via watching ConfigMaps.
-- **Downward API** — pod name, namespace, node name, labels, annotations injected as env vars or files. Technically emulable (we know the service name, can forge values), but requires a runtime service in compose — not just conversion-time file generation. First step onto the slope toward micro-kubelet-in-Python.
-- **In-cluster auth** — ServiceAccount tokens, RBAC-gated API calls. No API server, no tokens.
+- **Apps that use the K8s API** — service discovery via API instead of DNS, leader election via Lease objects, dynamic config via watching ConfigMaps. A suspect matching this description was last seen [here](https://github.com/baptisterajaut/h2c-api).
+- **Downward API** — pod name, namespace, node name, labels injected as env vars or files. The same suspect forged these too. Annotations are still at large.
+- **In-cluster auth** — ServiceAccount tokens, RBAC-gated API calls. The documents have been falsified. We don't talk about it.
 
 ### The slope
 
-> *He who flattens the world into files shall find that each file begets another, and each mount begets a service, until the flattening itself becomes a world — and the disciple realizes he has built not a bridge, but a second shore.*  
+> *He who flattens the world into files shall find that each file begets another, and each mount begets a service, until the flattening itself becomes a world — and the disciple realizes he has built not a bridge, but a second shore.*
 > — *Necronomicon, On the Limits of Flattening (probably²)*
 
 The downward API is the canary. It's the first feature that can't be handled at conversion time — it needs a runtime component. If we build it, we're no longer a converter, we're a runtime. That's where h2c stops being a tool and starts being a project that needs its own operator.
 
-Current stance: not in scope. If a workload genuinely needs downward API values to function, it probably needs the real thing.
+Current stance: not in scope. If a workload genuinely needs downward API values to function, it probably needs the real thing. For everything else, see the wanted list above.
 
 ## The Moldavian Scam goes for the green card [^1]
 

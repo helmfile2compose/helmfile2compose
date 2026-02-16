@@ -4,7 +4,7 @@ Convert `helmfile template` output to `compose.yml` + `Caddyfile`.
 
 Part of the [helmfile2compose](https://github.com/helmfile2compose) org. This repo contains the core converter script only. Related repos:
 - [h2c-manager](https://github.com/helmfile2compose/h2c-manager) — package manager + extension registry (`extensions.json`)
-- [h2c-docs](https://github.com/helmfile2compose/h2c-docs) — full documentation site
+- [h2c-docs](https://github.com/helmfile2compose/helmfile2compose.github.io) — full documentation site
 - Operator repos: [h2c-operator-keycloak](https://github.com/helmfile2compose/h2c-operator-keycloak), [h2c-operator-certmanager](https://github.com/helmfile2compose/h2c-operator-certmanager), [h2c-operator-trust-manager](https://github.com/helmfile2compose/h2c-operator-trust-manager)
 
 ## Workflow
@@ -112,6 +112,8 @@ services:                 # custom services added to compose (not from K8s)
 - `caddy_tls_internal` — optional. Adds `tls internal` to all Caddyfile host blocks.
 - `disableCaddy: true` — optional, manual only (never auto-generated). Skips Caddy service, writes Ingress rules to `Caddyfile-<project>`.
 - `network: <name>` — optional. Overrides the default compose network with an external one.
+- `core_version: v2.0.0` — optional. Pins the h2c-core version for h2c-manager (ignored by h2c-core itself).
+- `depends: [keycloak, certmanager==0.1.0, trust-manager]` — optional. Lists extensions for h2c-manager to auto-install (ignored by h2c-core itself).
 
 ### Automatic rewrites
 

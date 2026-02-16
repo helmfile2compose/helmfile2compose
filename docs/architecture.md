@@ -35,9 +35,21 @@ A dedicated helmfile environment (e.g. `compose`) typically disables K8s-only in
 
 ### Silently ignored (no compose equivalent)
 
-- RBAC, ServiceAccounts, NetworkPolicies, CRDs, Certificates (Certificate, ClusterIssuer, Issuer), IngressClass, Webhooks, Namespaces
+- RBAC, ServiceAccounts, NetworkPolicies, CRDs (unless claimed by a loaded operator), Certificates (Certificate, ClusterIssuer, Issuer), IngressClass, Webhooks, Namespaces
 - Probes (liveness, readiness, startup) — no healthcheck generation
 - Unknown kinds trigger a warning
+
+### External operators (`--operators-dir`)
+
+CRD conversion is extensible via external operator modules. `--operators-dir` points to a directory of `.py` files (or cloned repos with `.py` files one level deep). Each module provides converter classes with `kinds` and `convert()` — same interface as built-in converters. Loaded operators are registered into the dispatch loop and their kinds are added to `CONVERTED_KINDS`.
+
+```
+operators/
+├── keycloak.py                        # flat file — loaded directly
+├── h2c-operator-certmanager/          # git repo clone
+│   ├── certmanager.py                 # converter class(es)
+│   └── requirements.txt
+```
 
 ## Config file (`helmfile2compose.yaml`)
 

@@ -22,7 +22,7 @@ python3 helmfile2compose.py --helmfile-dir ~/stoat-platform -e local --output-di
 python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir .
 ```
 
-Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--compose-file`.
+Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--compose-file`, `--operators-dir`.
 
 **Doc note:** The primary workflow is `--helmfile-dir` (renders + converts in one step). `--from-dir` is for testing or when the caller controls rendering separately (e.g. `generate-compose.sh` in stoat/suite). Documentation should default to `--helmfile-dir` examples, not two-step `helmfile template` + `--from-dir`.
 
@@ -41,7 +41,7 @@ Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--
   - **PVC** → named volumes + `helmfile2compose.yaml` config
 - **Sidecar containers** (`containers[1:]`) → separate compose services with `network_mode: container:<main>` (shared network namespace)
 - Warns on stderr for: resource limits, HPA, CronJob, PDB, unknown kinds
-- Silently ignores: RBAC, ServiceAccounts, NetworkPolicies, CRDs, Certificates (Certificate, ClusterIssuer, Issuer), IngressClass, Webhooks, Namespaces
+- Silently ignores: RBAC, ServiceAccounts, NetworkPolicies, CRDs (unless claimed by a loaded operator), Certificates (Certificate, ClusterIssuer, Issuer), IngressClass, Webhooks, Namespaces
 - Writes `compose.yml` (configurable via `--compose-file`), `Caddyfile` (or `Caddyfile-<project>` when `disableCaddy: true`), `helmfile2compose.yaml`
 
 ### Config file (`helmfile2compose.yaml`)
@@ -135,6 +135,7 @@ CronJobs, resource limits/requests, HPA, PDB, RBAC, ServiceAccounts, NetworkPoli
 - **External network** — `network: <name>` in config overrides the default compose network with an external one. For cohabiting with existing infrastructure.
 - **DaemonSet conversion** — DaemonSets treated identically to Deployments (single-machine tool, no multi-node scheduling). Added to all workload iteration sites and `CONVERTED_KINDS`.
 - **Converter abstraction** — `ConvertContext`/`ConvertResult` dataclasses, `WorkloadConverter`/`IngressConverter` classes, converter dispatch loop in `convert()`, `CONVERTED_KINDS` derived from registrations. `convert_workload` → `WorkloadConverter._convert_one` + `_build_service`, `convert_ingress` → `_convert_one_ingress`. Init/sidecar container bodies deduplicated into `_build_aux_service`. PVC pre-registration extracted to `_preregister_pvcs`, first-run logic to `_init_first_run`, DNS rewrite loop to `_rewrite_k8s_dns_in_env`. Complexity: 5 C-rated → 1 C-rated, average B(5.98) → B(5.7).
+- **External operator loading** — `--operators-dir` flag to load CRD converter classes from external `.py` files. Scans flat files and one-level subdirectories (cloned repos). Operators implement `kinds` + `convert()`, import `ConvertContext`/`ConvertResult` from `helmfile2compose`. Import errors → warning, continue. Loaded kinds added to `CONVERTED_KINDS` (no "unknown kind" warning).
 
 ## Known gaps / next steps
 

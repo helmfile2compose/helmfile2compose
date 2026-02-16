@@ -42,9 +42,9 @@ CRD converters translate operator CRDs into synthetic standard K8s manifests (De
 
 Problem: the scam stays moldavian. CRD modules depend on the built-in converter internals. Adding a new CRD means knowing how to forge a Deployment dict that the main code will accept. Fragile, undocumented contract.
 
-### The real move (operation green card) — partially implemented
+### The real move (operation green card) — implemented
 
-The converter abstraction for built-in kinds is now in place. `WorkloadConverter` and `IngressConverter` exist as classes with `kinds` attributes and `convert()` methods, dispatched via a registration loop in `convert()`. `ConvertContext` and `ConvertResult` are dataclasses. `CONVERTED_KINDS` is derived from converter registrations — no separate list to maintain. The interface is duck-typed (no formal `Protocol` yet).
+The converter abstraction and external loading are both in place. `WorkloadConverter` and `IngressConverter` exist as built-in converters. `--operators-dir` loads external converter classes from `.py` files (flat or one-level subdirectories), registers them into the dispatch loop, and adds their kinds to `CONVERTED_KINDS`. Operators import `ConvertContext`/`ConvertResult` from `helmfile2compose` — that's the only coupling. The interface is duck-typed (no formal `Protocol` yet).
 
 ```python
 class Converter(Protocol):
@@ -74,13 +74,13 @@ Built-in converters:
 
 The remaining three (Service, ConfigMap/Secret, PVC) are consumed as lookup data by WorkloadConverter rather than producing compose output directly. Wrapping them as converters would formalize the indexing step and unify the dispatch, but there's no functional benefit until CRD converters need to participate in the same indexing.
 
-CRD converters (`converters/` in repo, extras via `--extra-converters-dir`) — still future:
+CRD converters (loaded via `--operators-dir`) — infrastructure ready, individual converters next:
 
 - `keycloak.py` — kinds: Keycloak, KeycloakRealmImport. Produces a compose service + realm JSON files.
 - `certmanager.py` — kinds: Certificate, ClusterIssuer, Issuer, Bundle. Produces *no services*, only generated cert/truststore files and volume mounts injected into existing services.
 - Future: Zalando PostgreSQL, Strimzi Kafka, etc. Anyone writes ~50 lines of Python.
 
-The infrastructure is ready — adding a CRD converter means writing a class with `kinds` and `convert()`, returning a `ConvertResult`. The `ConvertResult` design with `files`/`mounts` fields for cert-manager is still aspirational:
+The infrastructure is ready and wired — adding a CRD converter means writing a class with `kinds` and `convert()`, returning a `ConvertResult`, and dropping it in the operators directory. The `ConvertResult` design with `files`/`mounts` fields for cert-manager is still aspirational:
 
 ```python
 # Keycloak: CRD → workload

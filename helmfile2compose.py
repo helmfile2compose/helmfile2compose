@@ -6,6 +6,7 @@ import argparse
 import base64
 from dataclasses import dataclass, field
 import fnmatch
+import importlib.util
 import os
 import re
 import shutil
@@ -993,6 +994,61 @@ _CONVERTERS.extend([WorkloadConverter(), IngressConverter()])
 CONVERTED_KINDS = _INDEXED_KINDS | {k for c in _CONVERTERS for k in c.kinds}
 
 
+def _discover_operator_files(operators_dir):
+    """Find .py files in operators dir + one level into subdirectories."""
+    py_files = []
+    for entry in sorted(os.listdir(operators_dir)):
+        full = os.path.join(operators_dir, entry)
+        if entry.startswith(('_', '.')):
+            continue
+        if entry.endswith('.py') and os.path.isfile(full):
+            py_files.append(full)
+        elif os.path.isdir(full):
+            for sub in sorted(os.listdir(full)):
+                sub_full = os.path.join(full, sub)
+                if (sub.endswith('.py') and not sub.startswith(('_', '.'))
+                        and os.path.isfile(sub_full)):
+                    py_files.append(sub_full)
+    return py_files
+
+
+def _is_converter_class(obj, mod_name):
+    """Check if obj is a converter class defined in the given module."""
+    return (isinstance(obj, type)
+            and hasattr(obj, 'kinds') and isinstance(obj.kinds, (list, tuple))
+            and hasattr(obj, 'convert') and callable(obj.convert)
+            and obj.__module__ == mod_name)
+
+
+def _load_operators(operators_dir):
+    """Load converter classes from an operators directory."""
+    converters = []
+    for filepath in _discover_operator_files(operators_dir):
+        parent = str(Path(filepath).parent)
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
+        mod_name = f"h2c_op_{Path(filepath).stem}"
+        spec = importlib.util.spec_from_file_location(mod_name, filepath)
+        if spec is None or spec.loader is None:
+            continue
+        try:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"Warning: failed to load {filepath}: {exc}", file=sys.stderr)
+            continue
+        for attr_name in dir(module):
+            obj = getattr(module, attr_name)
+            if _is_converter_class(obj, mod_name):
+                converters.append(obj())
+
+    if converters:
+        loaded = ", ".join(
+            f"{type(c).__name__} ({', '.join(c.kinds)})" for c in converters)
+        print(f"Loaded operators: {loaded}", file=sys.stderr)
+    return converters
+
+
 def _resolve_volume_root(obj, volume_root: str):
     """Recursively resolve $volume_root placeholders in config values."""
     if isinstance(obj, str):
@@ -1308,6 +1364,10 @@ def main():
         "--compose-file", default="compose.yml",
         help="Name of the generated compose file (default: compose.yml)",
     )
+    parser.add_argument(
+        "--operators-dir",
+        help="Directory containing h2c operator modules for CRD conversion",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1330,6 +1390,15 @@ def main():
 
     if first_run:
         _init_first_run(config, manifests, args)
+
+    # Step 3b: load external operators
+    if args.operators_dir:
+        if not os.path.isdir(args.operators_dir):
+            print(f"Operators directory not found: {args.operators_dir}", file=sys.stderr)
+            sys.exit(1)
+        extra = _load_operators(args.operators_dir)
+        _CONVERTERS.extend(extra)
+        CONVERTED_KINDS.update(k for c in extra for k in c.kinds)
 
     # Step 4: convert
     services, caddy_entries, warnings = convert(manifests, config, output_dir=args.output_dir)

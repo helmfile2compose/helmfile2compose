@@ -65,7 +65,7 @@ Full docs at [helmfile2compose.github.io](https://helmfile2compose.github.io).
 | Repo | Description |
 |------|-------------|
 | [h2c-manager](https://github.com/helmfile2compose/h2c-manager) | Package manager + extension registry |
-| [h2c-docs](https://github.com/helmfile2compose/helmfile2compose.github.io) | Documentation site |
+| [helmfile2compose.github.io](https://github.com/helmfile2compose/helmfile2compose.github.io) | Documentation site |
 | [h2c-operator-keycloak](https://github.com/helmfile2compose/h2c-operator-keycloak) | Keycloak CRD converter |
 | [h2c-operator-certmanager](https://github.com/helmfile2compose/h2c-operator-certmanager) | cert-manager CRD converter |
 | [h2c-operator-trust-manager](https://github.com/helmfile2compose/h2c-operator-trust-manager) | trust-manager CRD converter |

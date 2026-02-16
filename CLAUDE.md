@@ -4,7 +4,7 @@ Convert `helmfile template` output to `compose.yml` + `Caddyfile`.
 
 Part of the [helmfile2compose](https://github.com/helmfile2compose) org. This repo contains the core converter script only. Related repos:
 - [h2c-manager](https://github.com/helmfile2compose/h2c-manager) — package manager + extension registry (`extensions.json`)
-- [h2c-docs](https://github.com/helmfile2compose/helmfile2compose.github.io) — full documentation site
+- [helmfile2compose.github.io](https://github.com/helmfile2compose/helmfile2compose.github.io) — full documentation site
 - Operator repos: [h2c-operator-keycloak](https://github.com/helmfile2compose/h2c-operator-keycloak), [h2c-operator-certmanager](https://github.com/helmfile2compose/h2c-operator-certmanager), [h2c-operator-trust-manager](https://github.com/helmfile2compose/h2c-operator-trust-manager)
 
 ## Workflow

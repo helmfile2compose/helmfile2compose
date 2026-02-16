@@ -1,34 +1,43 @@
-# helmfile2compose
+# helmfile2compose (h2c-core)
 
 Convert `helmfile template` output to `compose.yml` + `Caddyfile`.
+
+Part of the [helmfile2compose](https://github.com/helmfile2compose) org. This repo contains the core converter script only. Related repos:
+- [h2c-manager](https://github.com/helmfile2compose/h2c-manager) — package manager + extension registry (`extensions.json`)
+- [h2c-docs](https://github.com/helmfile2compose/h2c-docs) — full documentation site
+- Operator repos: [h2c-operator-keycloak](https://github.com/helmfile2compose/h2c-operator-keycloak), [h2c-operator-certmanager](https://github.com/helmfile2compose/h2c-operator-certmanager), [h2c-operator-trust-manager](https://github.com/helmfile2compose/h2c-operator-trust-manager)
 
 ## Workflow
 
 Lint often: run `pylint helmfile2compose.py` and `pyflakes helmfile2compose.py` after any change. Fix real issues (unused imports, actual bugs, f-strings without placeholders). Pylint style warnings (too-many-locals, line-too-long, etc.) are acceptable.
 
-Complexity: run `radon cc helmfile2compose.py -a -s -n C` to check cyclomatic complexity. Target: no D/E/F ratings. Current: 1 C-rated function (WorkloadConverter._build_service), average B (~5.7).
+Complexity: run `radon cc helmfile2compose.py -a -s -n C` to check cyclomatic complexity. Target: no D/E/F ratings. Current: 5 C-rated functions, average C (~12).
 
 ## What exists
 
-Single script `helmfile2compose.py` (~1360 lines). No packages, no setup.py. Dependency: `pyyaml`.
+Single script `helmfile2compose.py` (~1500 lines). No packages, no setup.py. Dependency: `pyyaml`.
 
 ### CLI
 
 ```bash
 # From helmfile directly (needs helmfile + helm installed)
-python3 helmfile2compose.py --helmfile-dir ~/stoat-platform -e local --output-dir .
+python3 helmfile2compose.py --helmfile-dir ~/my-platform -e compose --output-dir .
 
 # From pre-rendered manifests (skip helmfile)
 python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir .
+
+# With external operators
+python3 helmfile2compose.py --helmfile-dir ~/my-platform -e compose \
+  --extensions-dir .h2c/extensions --output-dir .
 ```
 
-Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--compose-file`, `--operators-dir`.
+Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--compose-file`, `--extensions-dir`.
 
 **Doc note:** The primary workflow is `--helmfile-dir` (renders + converts in one step). `--from-dir` is for testing or when the caller controls rendering separately (e.g. `generate-compose.sh` in stoat/suite). Documentation should default to `--helmfile-dir` examples, not two-step `helmfile template` + `--from-dir`.
 
 ### What it does
 
-- Parses multi-doc YAML from `helmfile template --output-dir` (recursive `.yaml` scan)
+- Parses multi-doc YAML from `helmfile template --output-dir` (recursive `.yaml` scan, malformed YAML skipped with warning)
 - Classifies manifests by `kind`
 - Converts:
   - **DaemonSet/Deployment/StatefulSet** → compose `services:` (image, env, command, volumes, ports)
@@ -37,12 +46,26 @@ Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--
   - **Service (ClusterIP)** → hostname rewriting (K8s Service name → compose service name) in env vars, Caddyfile, configmap files
   - **Service (ExternalName)** → resolved through alias chain (e.g. `docs-media` → minio FQDN → `minio`)
   - **Service (NodePort/LoadBalancer)** → `ports:` mapping
-  - **Ingress** → Caddy service + Caddyfile blocks (`reverse_proxy`), specific paths before catch-all
+  - **Ingress** → Caddy service + Caddyfile blocks (`reverse_proxy`), backend SSL via TLS transport, specific paths before catch-all
   - **PVC** → named volumes + `helmfile2compose.yaml` config
+- **Init containers** → separate compose services with `restart: on-failure`, named `{workload}-init-{container-name}`
 - **Sidecar containers** (`containers[1:]`) → separate compose services with `network_mode: container:<main>` (shared network namespace)
+- **Fix-permissions** → auto-generated for non-root containers with PVC bind mounts (`chown -R <uid>`)
+- **Hostname truncation** → services >63 chars get explicit `hostname:` to avoid sethostname failures
 - Warns on stderr for: resource limits, HPA, CronJob, PDB, unknown kinds
-- Silently ignores: RBAC, ServiceAccounts, NetworkPolicies, CRDs (unless claimed by a loaded operator), Certificates (Certificate, ClusterIssuer, Issuer), IngressClass, Webhooks, Namespaces
+- Silently ignores: RBAC, ServiceAccounts, NetworkPolicies, CRDs (unless claimed by a loaded operator), IngressClass, Webhooks, Namespaces
 - Writes `compose.yml` (configurable via `--compose-file`), `Caddyfile` (or `Caddyfile-<project>` when `disableCaddy: true`), `helmfile2compose.yaml`
+
+### External extensions (`--extensions-dir`)
+
+CRD conversion is extensible via external extension modules. `--extensions-dir` points to a directory of `.py` files (or cloned repos with `.py` files one level deep). Each module provides converter classes with `kinds` and `convert()` — same interface as built-in converters. Loaded extensions sorted by `priority` (lower = earlier, default 100), inserted before built-in converters.
+
+Operators import `ConvertContext`/`ConvertResult` from `helmfile2compose`. Available operators:
+- **keycloak** — `Keycloak`, `KeycloakRealmImport` (priority 50)
+- **certmanager** — `Certificate`, `ClusterIssuer`, `Issuer` (priority 10, requires `cryptography`)
+- **trust-manager** — `Bundle` (priority 20, depends on certmanager)
+
+Install via h2c-manager: `python3 h2c-manager.py keycloak certmanager trust-manager`
 
 ### Config file (`helmfile2compose.yaml`)
 
@@ -53,6 +76,7 @@ helmfile2ComposeVersion: v1
 name: my-platform
 volume_root: ./data        # prefix for bare host_path names (default: ./data)
 caddy_email: admin@example.com  # optional — for Caddy automatic HTTPS
+caddy_tls_internal: true   # optional — force Caddy internal CA for all domains
 volumes:
   data-postgresql:
     driver: local          # named docker volume
@@ -63,10 +87,10 @@ volumes:
 exclude:
   - prometheus-operator    # skip this workload
   - meet-celery-*          # wildcards supported (fnmatch)
-replacements:             # string replacements in generated files and env vars (port remaps are automatic now)
+replacements:             # string replacements in generated files, env vars, and Caddyfile upstreams
   - old: 'path_style_buckets = false'
     new: 'path_style_buckets = true'
-overrides:                # shallow merge into generated services (null deletes key)
+overrides:                # deep merge into generated services (null deletes key)
   redis-master:
     image: redis:7-alpine
     command: ["redis-server", "--requirepass", "$secret:redis:redis-password"]
@@ -83,61 +107,38 @@ services:                 # custom services added to compose (not from K8s)
 ```
 
 - `$secret:<name>:<key>` — placeholders in `overrides` and `services` values, resolved from K8s Secret manifests at generation time. `null` values in overrides delete the key.
-- `$volume_root` — placeholder in `overrides` and `services` values, resolved to the `volume_root` config value. Keeps all paths relative to a single configurable root.
-- `caddy_email` — optional. If set, generates a global Caddy block `{ email <value> }` for automatic HTTPS certificate provisioning.
-- `disableCaddy: true` — optional, manual only (never auto-generated). Skips the Caddy service in compose and writes Ingress rules to `Caddyfile-<project>` instead. For cohabiting with existing infrastructure — see `docs/advanced.md`.
-- `network: <name>` — optional. Overrides the default compose network with an external one (`networks.default.external: true`). Required when sharing a network across multiple compose projects.
+- `$volume_root` — placeholder in `overrides` and `services` values, resolved to the `volume_root` config value.
+- `caddy_email` — optional. Generates a global Caddy block `{ email <value> }`.
+- `caddy_tls_internal` — optional. Adds `tls internal` to all Caddyfile host blocks.
+- `disableCaddy: true` — optional, manual only (never auto-generated). Skips Caddy service, writes Ingress rules to `Caddyfile-<project>`.
+- `network: <name>` — optional. Overrides the default compose network with an external one.
+
+### Automatic rewrites
+
+- **K8s DNS** — `<svc>.<ns>.svc.cluster.local` and `<svc>.<ns>.svc` rewritten to compose service names
+- **Service aliases** — K8s Services whose name differs from the workload are resolved through the alias chain
+- **Port remapping** — K8s Service port → container port in URLs and env vars
+- **Kubelet `$(VAR)`** — resolved from container env vars at generation time
+- **Shell `$VAR` escaping** — escaped to `$$VAR` for compose
+- **String replacements** — user-defined `replacements:` applied to env vars, ConfigMap files, and Caddyfile upstreams
+- **`status.podIP` fieldRef** — resolved to compose service name
+- **Post-process env** — DNS rewriting, alias/port resolution applied to all services including operator-produced ones (idempotent)
 
 ### Tested with
 
 - Synthetic multi-doc YAML (Deployment, StatefulSet, ConfigMap, Secret, Service, Ingress, HPA, CronJob)
-- Real `helmfile template` output from `~/stoat-platform` (`helmfile -e local template --output-dir /tmp/h2c-rendered` then `--from-dir`)
-- Real `helmfile template` output from `~/suite-helmfile` (larger helmfile, ~16 charts)
-- `docker compose config` validates generated output for both projects
+- Real `helmfile template` output from `~/stoat-platform` (~15 services)
+- Real `helmfile template` output from `~/suite-helmfile` (~16 charts, 22 services + 11 init jobs)
+- Real `helmfile template` output from pa-helm-deploy (operators, cert-manager, trust-manager, backend SSL)
+- `docker compose config` validates generated output for all projects
+- Regression tests: known-good output in `/tmp/h2c-regression/{stoat,lasuite}/`
 
-## Out of scope (MVP)
+## Out of scope
 
 CronJobs, resource limits/requests, HPA, PDB, RBAC, ServiceAccounts, NetworkPolicies, probes→healthcheck.
 
-## Recent fixes
-
-- **Named ports** — K8s Service `targetPort` can be a string (e.g. `http`). Now resolved to numeric via container port definitions.
-- **Secret base64 decoding** — K8s `Secret.data` values are base64-encoded. Now decoded before injecting into compose `environment:`. Handles both `data` (base64) and `stringData` (plain).
-- **First-run auto-exclude** — When `helmfile2compose.yaml` doesn't exist, auto-excludes K8s-only workloads (matching `cert-manager`, `ingress`, `reflector` in name) and warns that manual review is needed.
-- **Ingress port resolution** — Ingress backends reference Service ports, but compose talks directly to containers. Now resolves the full chain: Service port → targetPort → containerPort (e.g. livekit Service port 80 → named targetPort `http` → containerPort 7880).
-- **ConfigMap/Secret volume mounts** — ConfigMaps and Secrets referenced as volumes are now generated as files under `configmaps/<name>/` and `secrets/<name>/`, then bind-mounted (with `subPath` and `items` support). Deduplicates across services (e.g. revolt-toml mounted by 8 services, generated once).
-- **K8s DNS rewriting** — `<svc>.<ns>.svc.cluster.local` automatically rewritten to `<svc>` in env var values and generated ConfigMap files. Compose service names already match K8s service names.
-- **Ingress path rewrite** — `haproxy.org/path-rewrite` and `nginx.ingress.kubernetes.io/rewrite-target` annotations are translated to Caddy `uri strip_prefix` directives in the Caddyfile.
-- **Config versioning** — `helmfile2compose.yaml` now includes `helmfile2ComposeVersion: v1` and a repo URL in the header comment.
-- **Service overrides** — `overrides:` section in config for shallow-merging into generated services. `null` deletes a key. Useful for replacing bitnami images with vanilla ones.
-- **Custom services** — `services:` section for adding non-K8s services (e.g. one-shot init containers like `minio-init`). Combined with `restart: on-failure` for retry-until-ready pattern.
-- **$secret references** — `$secret:<name>:<key>` placeholders in overrides and custom services, resolved from K8s Secret manifests at generation time.
-- **String replacements** — `replacements:` section for global find/replace in generated ConfigMap/Secret files and env vars. Still useful for non-port rewrites (e.g. `path_style_buckets`).
-- **restart: always** — default for all generated services.
-- **volume_root** — configurable base path for host volumes (default `./data`). Bare `host_path` names are prefixed with it. Auto-discovered PVCs default to `host_path: <pvc_name>`. `$volume_root` placeholder resolved in overrides and custom services.
-- **Service alias resolution** — K8s Services whose name differs from the workload (e.g. `keycloak-keycloakx-http` → `keycloak-keycloakx`) are automatically rewritten in env vars, Caddyfile upstreams, and configmap files. ExternalName services (e.g. `docs-media` → minio) are resolved through the alias chain. No `networks.default.aliases` generated — compatible with nerdctl compose.
-- **Automatic port remapping** — K8s Services remap ports (e.g. port 80 → targetPort 8080). URLs with implicit ports (`http://svc` = port 80) or explicit K8s Service ports are automatically rewritten to use the actual container port. Eliminates manual `replacements` for port mismatches (keycloak 80→8080, livekit 80→7880, etc.).
-- **Job conversion** — K8s Jobs (migrations, superuser creation, etc.) converted to compose services with `restart: on-failure`. One-shot retry-until-ready pattern. K8s-only Jobs (cert-manager, ingress CRDs) should be excluded.
-- **K8s `$(VAR)` resolution** — Kubelet resolves `$(VAR_NAME)` in container command/args from the container's env vars. Now inlined at generation time.
-- **Shell `$VAR` escaping for compose** — Shell variable references (`$VAR`) in command/entrypoint are escaped to `$$VAR` in compose YAML, preventing compose from interpreting them as host variable substitution. The container's shell expands them at runtime from its own environment.
-
-- **Complexity refactoring** — Major functions refactored to reduce cyclomatic complexity: resolve_env (E→A), convert (D→B), _convert_volume_mounts (D→B), _build_alias_map (C→B), _build_service_port_map (C→B), _generate_secret_files (C→A), convert_workload (C→C), write_caddyfile (C→B). Shared helpers extracted (_index_workloads, _match_selector). Dead code removed (_get_network_aliases). Average complexity: B(8.59) → B(5.98).
-- **Lint cleanup** — Constants grouped at top of file. Unused function parameters removed. Broad `except Exception` narrowed to specific types. All file writes use explicit `encoding="utf-8"`. Pylint 9.66/10, pyflakes clean.
-- **Wildcard excludes** — `exclude:` patterns now support wildcards via `fnmatch` (e.g. `meet-celery-*`). Exact names still work.
-- **replicas: 0 auto-skip** — Workloads with `spec.replicas: 0` are automatically skipped with a warning (e.g. disabled AI services in meet). No need to manually exclude them.
-- **Init container conversion** — K8s init containers converted to separate compose services with `restart: on-failure`, named `{workload}-init-{container-name}`. Same brute-force retry pattern as Jobs. Shares pod-level volumes (PVC, ConfigMap, Secret) but not emptyDir (anonymous volumes, not shared between compose services).
-- **volumeClaimTemplates** — StatefulSet VCTs now registered as PVC volumes. Previously only `persistentVolumeClaim` references in pod volumes were handled.
-- **PVC pre-registration** — PVCs from both regular volumes and VCTs are pre-registered in config before workload conversion. Fixes first-run where PVCs were discovered too late and rendered as named volumes instead of host_path bind mounts.
-- **Automatic fix-permissions** — Non-root containers (`securityContext.runAsUser > 0`) with PVC bind mounts automatically generate a `fix-permissions` service (busybox, root, `chown -R <uid>`) in compose.yml. No manual config needed. Fixes Bitnami images (PostgreSQL UID 1001, Redis UID 1001, MongoDB UID 1001) failing with `permission denied` on host-mounted data directories.
-
-- **Sidecar container conversion** — K8s sidecar containers (`containers[1:]`) converted to separate compose services with `network_mode: container:<project>-<main>` (shared network namespace). `container_name` set on parent service, `depends_on` ensures startup order. Naming: `{workload}-sidecar-{container-name}`. `_build_service_port_map` now loops all containers (not just `[0]`).
-- **disableCaddy** — `disableCaddy: true` in config skips the Caddy service in compose. Ingress rules still written to `Caddyfile-<project>` for manual merging. Never auto-generated.
-- **External network** — `network: <name>` in config overrides the default compose network with an external one. For cohabiting with existing infrastructure.
-- **DaemonSet conversion** — DaemonSets treated identically to Deployments (single-machine tool, no multi-node scheduling). Added to all workload iteration sites and `CONVERTED_KINDS`.
-- **Converter abstraction** — `ConvertContext`/`ConvertResult` dataclasses, `WorkloadConverter`/`IngressConverter` classes, converter dispatch loop in `convert()`, `CONVERTED_KINDS` derived from registrations. `convert_workload` → `WorkloadConverter._convert_one` + `_build_service`, `convert_ingress` → `_convert_one_ingress`. Init/sidecar container bodies deduplicated into `_build_aux_service`. PVC pre-registration extracted to `_preregister_pvcs`, first-run logic to `_init_first_run`, DNS rewrite loop to `_rewrite_k8s_dns_in_env`. Complexity: 5 C-rated → 1 C-rated, average B(5.98) → B(5.7).
-- **External operator loading** — `--operators-dir` flag to load CRD converter classes from external `.py` files. Scans flat files and one-level subdirectories (cloned repos). Operators implement `kinds` + `convert()`, import `ConvertContext`/`ConvertResult` from `helmfile2compose`. Import errors → warning, continue. Loaded kinds added to `CONVERTED_KINDS` (no "unknown kind" warning).
-
-## Known gaps / next steps
+## Known gaps
 
 - **S3 virtual-hosted style** — AWS SDK defaults to virtual-hosted bucket URLs (`bucket.host:port`). Compose DNS can't resolve dotted aliases. Fix app-side with `force_path_style` / `path_style_buckets = true`, then use a `replacement` to flip the value.
 - **ConfigMap/Secret name collisions** — the manifest index is flat (no namespace). If two CMs share a name across namespaces with different content, last-parsed wins. Not a problem for reflector (same content by definition).
+- **emptyDir sharing** — K8s `emptyDir` volumes shared between init/sidecar containers and the main container are converted to anonymous volumes, not shared in compose. Manual named volume mapping needed.

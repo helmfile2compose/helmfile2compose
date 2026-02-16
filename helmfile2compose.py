@@ -1074,11 +1074,11 @@ _CONVERTERS.extend([WorkloadConverter(), IngressConverter()])
 CONVERTED_KINDS = _INDEXED_KINDS | {k for c in _CONVERTERS for k in c.kinds}
 
 
-def _discover_operator_files(operators_dir):
-    """Find .py files in operators dir + one level into subdirectories."""
+def _discover_extension_files(extensions_dir):
+    """Find .py files in extensions dir + one level into subdirectories."""
     py_files = []
-    for entry in sorted(os.listdir(operators_dir)):
-        full = os.path.join(operators_dir, entry)
+    for entry in sorted(os.listdir(extensions_dir)):
+        full = os.path.join(extensions_dir, entry)
         if entry.startswith(('_', '.')):
             continue
         if entry.endswith('.py') and os.path.isfile(full):
@@ -1100,10 +1100,10 @@ def _is_converter_class(obj, mod_name):
             and obj.__module__ == mod_name)
 
 
-def _load_operators(operators_dir):
-    """Load converter classes from an operators directory."""
+def _load_extensions(extensions_dir):
+    """Load converter classes from an extensions directory."""
     converters = []
-    for filepath in _discover_operator_files(operators_dir):
+    for filepath in _discover_extension_files(extensions_dir):
         parent = str(Path(filepath).parent)
         if parent not in sys.path:
             sys.path.insert(0, parent)
@@ -1127,7 +1127,7 @@ def _load_operators(operators_dir):
     if converters:
         loaded = ", ".join(
             f"{type(c).__name__} ({', '.join(c.kinds)})" for c in converters)
-        print(f"Loaded operators: {loaded}", file=sys.stderr)
+        print(f"Loaded extensions: {loaded}", file=sys.stderr)
     return converters
 
 
@@ -1496,8 +1496,8 @@ def main():
         help="Name of the generated compose file (default: compose.yml)",
     )
     parser.add_argument(
-        "--operators-dir",
-        help="Directory containing h2c operator modules for CRD conversion",
+        "--extensions-dir",
+        help="Directory containing h2c extension modules (operators, ingress converters)",
     )
     args = parser.parse_args()
 
@@ -1522,12 +1522,12 @@ def main():
     if first_run:
         _init_first_run(config, manifests, args)
 
-    # Step 3b: load external operators
-    if args.operators_dir:
-        if not os.path.isdir(args.operators_dir):
-            print(f"Operators directory not found: {args.operators_dir}", file=sys.stderr)
+    # Step 3b: load extensions
+    if args.extensions_dir:
+        if not os.path.isdir(args.extensions_dir):
+            print(f"Extensions directory not found: {args.extensions_dir}", file=sys.stderr)
             sys.exit(1)
-        extra = _load_operators(args.operators_dir)
+        extra = _load_extensions(args.extensions_dir)
         _CONVERTERS[0:0] = extra
         CONVERTED_KINDS.update(k for c in extra for k in c.kinds)
 

@@ -1,48 +1,32 @@
-# helmfile2compose
+# h2c-core
 
-*For when you maintain a helmfile but people keep asking for a docker-compose. I'm fairly certain I've grown tentacles*
+![vibe coded](https://img.shields.io/badge/vibe-coded-ff69b4)
+![python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB)
+![heresy: 9/10](https://img.shields.io/badge/heresy-9%2F10-8b0000)
+![deity: Yog Sa'rath](https://img.shields.io/badge/deity-Yog%20Sa'rath-8b0000)
+![public domain](https://img.shields.io/badge/license-public%20domain-brightgreen)
 
-![Python](https://img.shields.io/badge/python-3.10+-blue)
-![License](https://img.shields.io/badge/license-public%20domain-brightgreen)
-![Vibe](https://img.shields.io/badge/vibe-coded-ff69b4)
-![Deity](https://img.shields.io/badge/deity-Yog%20Sa'rath-black)
+*The core converter script for [helmfile2compose](https://github.com/helmfile2compose). Patient zero.*
 
-Convert Kubernetes manifests to `compose.yml` + `Caddyfile`. Not Kubernetes-in-Docker (kind, k3d, minikube...) - no cluster, no kubelet, no shim. A devolution of the power of Kubernetes into the simplicity of compose: real `docker compose up`, real Caddy, plain stupid containers.
+This is where it started — a single Python script, born from the unholy request to make Kubernetes run without Kubernetes. It worked. That was the worst possible outcome. From this aberration, an [entire ecosystem](https://github.com/helmfile2compose) grew: a package manager, CRD operators, documentation — a temple built for the sole purpose of dismantling a greater and more beautiful one.
 
-### But why?
+Core of the problem: feed it Kubernetes manifests (from `helmfile template`, `helm template`, `kustomize build`, whatever produced them) and it will spit out a `compose.yml` and a `Caddyfile`. Not Kubernetes-in-Docker — no cluster, no kubelet, no shim. Plain `docker compose up`.
 
-I love helmfile. I love Kubernetes. But people keep asking me for a docker-compose for my community projects, and I'm not going to maintain both by hand. There are dozens of tools that go from Compose to Kubernetes ([Kompose](https://github.com/kubernetes/kompose), [Compose Bridge](https://docs.docker.com/compose/bridge/), [Move2Kube](https://move2kube.konveyor.io/), etc.) — that's the "normal" direction. Almost nothing goes the other way, because who would design their deployment in K8s first and then downgrade? Well, me. Using Kubernetes manifests as an intermediate representation to generate a docker-compose is absolutely using an ICBM to kill flies — which is exactly why I find it satisfying.
+## Quick start
 
-I vibe-coded this glorious abomination with Claude rather than MAINTAIN A SEPARATE DOCKER-COMPOSE BY HAND. This script should not need to exist. Nobody should have asked me for this. And yet it works.
-
-It fits in ~1300 lines of pure framework-less Python — which is almost certainly more complex than any compose file it will ever generate, and maybe even me. I could never have written this myself; somewhere around the automatic bind-mount permission fixing, I stopped understanding not just the code it was writing, but its explanations of the code it was writing. As far as I know, nobody has ever made a K8s-to-compose converter powerful enough to be useful to anyone other than an insane cultist — and I'm unreasonably proud of that.
-
-> *The disciples beseeched the architect: render thy celestial works in common clay, that we may raise them without knowledge of the heavens. It was heresy. The architect obliged. The temples stood.*
->
-> — The Necronomicon, *Prayers That Should Never Have Been Answered* (probably)
-
-### Does it require helmfile?
-
-No. Despite the name, the core of the tool converts **any Kubernetes manifests** to compose. Helmfile is just one way to produce them. `--from-dir` accepts any directory of `.yaml` files:
+Download `helmfile2compose.py` from the [latest release](https://github.com/helmfile2compose/h2c-core/releases/latest).
 
 ```bash
-# From helmfile
-helmfile -e local template --output-dir /tmp/manifests
-# From helm
-helm template myrelease mychart -f values.yaml --output-dir /tmp/manifests
-# From kustomize
-kustomize build ./overlay -o /tmp/manifests/
+# Convert from helmfile
+python3 helmfile2compose.py --helmfile-dir ~/my-platform -e compose --output-dir .
+
+# Or from any K8s manifests
+python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir .
+
+docker compose up -d
 ```
 
-Then point the tool at it:
-
-```bash
-python3 helmfile2compose.py --from-dir /tmp/manifests --output-dir ./compose
-```
-
-The `--helmfile-dir` flag is a convenience shortcut that runs `helmfile template` for you — nothing more.
-
-I named it helmfile2compose because both helmfile and docker-compose share the same purpose: deploying an entire self-contained platform at once. If you're using this script to convert something that isn't self-contained, you are further into the abyss than I ever ventured, and I am certain it will end terribly. Yog Sa'rath, stay away from me.
+If your stack uses CRDs (Keycloak, cert-manager, trust-manager), grab the operator `.py` files from their repos, drop them in a directory, and pass `--extensions-dir` to the script. For managing extensions and automating downloads, see [h2c-manager](https://github.com/helmfile2compose/h2c-manager).
 
 ## Requirements
 
@@ -50,70 +34,42 @@ I named it helmfile2compose because both helmfile and docker-compose share the s
 - `pyyaml`
 - `helmfile` + `helm` (only if rendering from helmfile directly)
 
-## Usage
+## What it converts
 
-```bash
-# From helmfile directly
-python3 helmfile2compose.py --helmfile-dir ~/my-platform -e local --output-dir ./compose
+| K8s kind | Compose equivalent |
+|----------|-------------------|
+| Deployment / StatefulSet / DaemonSet | `services:` (image, env, command, volumes, ports) |
+| Job | `services:` with `restart: on-failure` |
+| ConfigMap / Secret | Inline `environment:` + generated files for volume mounts |
+| Service | Hostname/alias/port rewriting |
+| Ingress | Caddy `reverse_proxy` (auto-TLS, path routing, backend SSL) |
+| PVC / volumeClaimTemplates | Host-path bind mounts |
 
-# From pre-rendered manifests (skip helmfile)
-helmfile -e local template --output-dir /tmp/rendered
-python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir ./compose
-```
+Init containers, sidecars, fix-permissions services, and hostname truncation are handled automatically.
 
-### Flags
+CRDs (Keycloak, cert-manager, trust-manager) are handled by [external operators](https://github.com/helmfile2compose/h2c-docs/blob/main/operators.md) via `--extensions-dir`.
 
-| Flag | Description |
-|------|-------------|
-| `--helmfile-dir` | Directory containing `helmfile.yaml` or `helmfile.yaml.gotmpl` (default: `.`) |
-| `-e`, `--environment` | Helmfile environment (e.g. `local`, `production`) |
-| `--from-dir` | Skip helmfile, read pre-rendered YAML from this directory |
-| `--output-dir` | Where to write output files (default: `.`) |
-| `--compose-file` | Name of the generated compose file (default: `compose.yml`) |
+## Output files
 
-### Output files
-
-- `compose.yml` -- services (incl. Caddy reverse proxy), volumes
-- `Caddyfile` (or `Caddyfile-<project>` when `disableCaddy: true`) -- reverse proxy config derived from Ingress manifests
-- `helmfile2compose.yaml` -- persistent config ([reference](docs/architecture.md#config-file-helmfile2composeyaml))
-- `configmaps/` -- generated files from ConfigMap volume mounts
-- `secrets/` -- generated files from Secret volume mounts
+- `compose.yml` — services, volumes
+- `Caddyfile` — reverse proxy config from Ingress manifests
+- `helmfile2compose.yaml` — persistent config (volumes, excludes, overrides)
+- `configmaps/` / `secrets/` — generated files from volume mounts
 
 ## Documentation
 
-- **[Your project](docs/your-project.md)** — using helmfile2compose with your own helmfile (start here)
-- **[Architecture](docs/architecture.md)** — pipeline, conversion table, config file reference, K8s vs Compose differences and gotchas
-- **[Usage guide](docs/usage-guide.md)** — day-to-day operations: regenerating, data management, troubleshooting
-- **[Limitations](docs/limitations.md)** — what gets lost in translation (and why)
-- **[Advanced](docs/advanced.md)** — cohabiting with existing infrastructure, multiple projects, disabling Caddy
-- **[Future](docs/future.md)** — CRD converter plugin system, cert-manager/trust-manager, emulation boundary
+Full docs at [helmfile2compose.github.io/h2c-docs](https://helmfile2compose.github.io/h2c-docs).
 
-## Compatible projects
+## Related repos
 
-These are the projects that caused this tool to exist — helmfile was the source of truth, then people asked for a docker-compose. Both ship a `generate-compose.sh` that downloads helmfile2compose from a pinned release, and a `helmfile2compose.yaml` template that handles project-specific gotchas (image overrides, volume mappings, port ranges, etc.).
+| Repo | Description |
+|------|-------------|
+| [h2c-manager](https://github.com/helmfile2compose/h2c-manager) | Package manager + extension registry |
+| [h2c-docs](https://github.com/helmfile2compose/h2c-docs) | Documentation site |
+| [h2c-operator-keycloak](https://github.com/helmfile2compose/h2c-operator-keycloak) | Keycloak CRD converter |
+| [h2c-operator-certmanager](https://github.com/helmfile2compose/h2c-operator-certmanager) | cert-manager CRD converter |
+| [h2c-operator-trust-manager](https://github.com/helmfile2compose/h2c-operator-trust-manager) | trust-manager CRD converter |
 
-### [stoatchat-platform](https://github.com/baptisterajaut/stoatchat-platform)
+## License
 
-A chat platform (Revolt rebranded) deployed via helmfile: API, events, file server, proxy, web client, MongoDB, Redis, RabbitMQ, MinIO, LiveKit. **15 services running** via helmfile2compose. The chaos is kept somewhat minimal, as it worked well with the first — rather barebones — release.
-
-Notable config: shared `Revolt.toml` ConfigMap across 8 services, bitnami Redis replaced with vanilla via `overrides:`, MinIO bucket init via custom `services:`, S3 path-style via `replacements:`.
-
-### [lasuite-platform](https://github.com/baptisterajaut/lasuite-platform)
-
-A collaborative suite (~16 Helm charts): docs, drive, meet, people, conversations, keycloak, minio, postgresql, redis, livekit. **22 services + 11 init jobs running** via helmfile2compose. Forbidden knowledge has been acquired. There's tentacles appearing already.
-
-Notable config: wildcard excludes, automatic alias resolution across charts, Job conversion for Django migrations, replicas:0 auto-skip for disabled apps.
-
-### An actual production-critical helmfile?
-
-There is one — a real multi-environment helmfile with operators, SOPS encryption, CI/CD pipelines, and all the ceremonies of proper infrastructure. Converting that would require crossing the barrier of humanity (even for Claude). If you dare gaze into that abyss, see [docs/future.md](docs/future.md).
-
-## Code quality
-
-```bash
-pylint helmfile2compose.py          # 9.53/10
-pyflakes helmfile2compose.py        # clean
-radon cc helmfile2compose.py -a -s  # average C (~15), 5 C-rated functions, no D/E/F
-```
-
-How the fuck this scores so well is beyond me. Claude probably broke a formula and it overflows somewhere, don't ask me. Good luck maintaining this without an LLM — or when the AI bubble explodes and you have to pay $300/month to talk to one.
+Public domain.

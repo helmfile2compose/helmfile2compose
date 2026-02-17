@@ -84,7 +84,7 @@ Not converted. A CronJob would need an external scheduler or a `sleep`-loop wrap
 
 Operator-managed resources (`Keycloak`, `KeycloakRealmImport`, Zalando `postgresql`, Strimzi `Kafka`, etc.) are skipped with a warning unless a loaded operator handles them.
 
-External operators can be loaded via `--operators-dir` to convert CRDs. The dispatch loop, `ConvertContext`/`ConvertResult` dataclasses, and dynamic loading are all in place — individual CRD converters (keycloak, certmanager) are the next step. See [future.md](future.md).
+External operators can be loaded via `--operators-dir` to convert CRDs. The dispatch loop, `ConvertContext`/`ConvertResult` dataclasses, and dynamic loading are all in place — individual CRD converters (keycloak, cert-manager) are the next step. See [future.md](future.md).
 
 ### Longhorn
 

@@ -46,8 +46,8 @@ CRD conversion is extensible via external operator modules. `--operators-dir` po
 ```
 operators/
 ├── keycloak.py                        # flat file — loaded directly
-├── h2c-operator-certmanager/          # git repo clone
-│   ├── certmanager.py                 # converter class(es)
+├── h2c-operator-cert-manager/         # git repo clone
+│   ├── cert_manager.py                # converter class(es)
 │   └── requirements.txt
 ```
 

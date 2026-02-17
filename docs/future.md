@@ -77,7 +77,7 @@ The remaining three (Service, ConfigMap/Secret, PVC) are consumed as lookup data
 CRD converters (loaded via `--operators-dir`) — infrastructure ready, individual converters next:
 
 - `keycloak.py` — kinds: Keycloak, KeycloakRealmImport. Produces a compose service + realm JSON files.
-- `certmanager.py` — kinds: Certificate, ClusterIssuer, Issuer, Bundle. Produces *no services*, only generated cert/truststore files and volume mounts injected into existing services.
+- `cert_manager.py` — kinds: Certificate, ClusterIssuer, Issuer, Bundle. Produces *no services*, only generated cert/truststore files and volume mounts injected into existing services.
 - Future: Zalando PostgreSQL, Strimzi Kafka, etc. Anyone writes ~50 lines of Python.
 
 The infrastructure is ready and wired — adding a CRD converter means writing a class with `kinds` and `convert()`, returning a `ConvertResult`, and dropping it in the operators directory. The `ConvertResult` design with `files`/`mounts` fields for cert-manager is still aspirational:

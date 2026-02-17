@@ -1528,6 +1528,25 @@ def main():
             print(f"Extensions directory not found: {args.extensions_dir}", file=sys.stderr)
             sys.exit(1)
         extra = _load_extensions(args.extensions_dir)
+        # Check for duplicate kind claims between extensions
+        ext_kind_owners: dict[str, str] = {}
+        for c in extra:
+            for k in c.kinds:
+                if k in ext_kind_owners:
+                    print(f"Error: kind '{k}' claimed by both "
+                          f"{ext_kind_owners[k]} and "
+                          f"{type(c).__name__} (extensions)",
+                          file=sys.stderr)
+                    sys.exit(1)
+                ext_kind_owners[k] = type(c).__name__
+        # Extensions override built-in converters for the same kind
+        overridden = set(ext_kind_owners)
+        for c in _CONVERTERS:
+            lost = overridden & set(c.kinds)
+            if lost:
+                c.kinds = [k for k in c.kinds if k not in overridden]
+                print(f"Extension overrides built-in {type(c).__name__} "
+                      f"for: {', '.join(sorted(lost))}")
         _CONVERTERS[0:0] = extra
         CONVERTED_KINDS.update(k for c in extra for k in c.kinds)
 

@@ -7,6 +7,7 @@ import base64
 from dataclasses import dataclass, field
 import fnmatch
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -102,8 +103,27 @@ def _is_excluded(name: str, exclude_list: list[str]) -> bool:
 # Parsing
 # ---------------------------------------------------------------------------
 
-def run_helmfile_template(helmfile_dir: str, output_dir: str, environment: str | None = None) -> str:
-    """Run helmfile template and return the path to rendered manifests."""
+def _helmfile_list_namespaces(helmfile_path: str,
+                              environment: str | None = None) -> dict[str, str]:
+    """Run ``helmfile list`` and return a release-name → namespace mapping."""
+    cmd = ["helmfile", "--file", helmfile_path]
+    if environment:
+        cmd.extend(["--environment", environment])
+    cmd.extend(["list", "--output", "json"])
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        releases = json.loads(result.stdout)
+        return {r["name"]: r.get("namespace", "") for r in releases if r.get("namespace")}
+    except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as exc:
+        print(f"⚠ helmfile list failed ({exc.__class__.__name__}), "
+              f"namespace inference will rely on manifest metadata only",
+              file=sys.stderr)
+        return {}
+
+
+def run_helmfile_template(helmfile_dir: str, output_dir: str,
+                          environment: str | None = None) -> tuple[str, dict[str, str]]:
+    """Run helmfile template and return (rendered_dir, release_ns_map)."""
     rendered_dir = os.path.join(output_dir, ".helmfile-rendered")
     if os.path.exists(rendered_dir):
         shutil.rmtree(rendered_dir)
@@ -120,25 +140,102 @@ def run_helmfile_template(helmfile_dir: str, output_dir: str, environment: str |
     cmd.extend(["template", "--output-dir", rendered_dir])
     print(f"Running: {' '.join(cmd)}", file=sys.stderr)
     subprocess.run(cmd, check=True)
-    return rendered_dir
+    release_ns_map = _helmfile_list_namespaces(helmfile_path, environment)
+    return rendered_dir, release_ns_map
 
 
 def parse_manifests(rendered_dir: str) -> dict[str, list[dict]]:
-    """Load all YAML files from rendered_dir, classify by kind."""
+    """Load all YAML files from rendered_dir, classify by kind.
+
+    Each manifest gets an internal ``_h2c_release_dir`` annotation (the
+    first path component relative to *rendered_dir*) so that downstream
+    steps can group manifests by helmfile release.
+    """
     manifests: dict[str, list[dict]] = {}
     rendered = Path(rendered_dir)
     for yaml_file in sorted(rendered.rglob("*.yaml")):
+        # First path component relative to rendered_dir = release directory
+        rel = yaml_file.relative_to(rendered)
+        release_dir = rel.parts[0] if rel.parts else ""
         try:
             with open(yaml_file) as f:
                 for doc in yaml.safe_load_all(f):
                     if not doc or not isinstance(doc, dict):
                         continue
+                    doc["_h2c_release_dir"] = release_dir
                     kind = doc.get("kind", "Unknown")
                     manifests.setdefault(kind, []).append(doc)
         except yaml.YAMLError as exc:
             print(f"⚠ Skipping {yaml_file.name}: {exc.__class__.__name__}",
                   file=sys.stderr)
     return manifests
+
+
+def _extract_release_name(release_dir: str) -> str:
+    """Extract the release name from a helmfile output directory name.
+
+    Directory format: ``helmfile.yaml-<hash>-<release-name>`` or just ``<name>``.
+    """
+    # "helmfile.yaml" prefix is constant, followed by 8-char hex hash
+    # e.g. "helmfile.yaml-01df6c56-minio" → "minio"
+    prefix = "helmfile.yaml-"
+    if release_dir.startswith(prefix):
+        rest = release_dir[len(prefix):]
+        # Skip the hash part (first segment before '-')
+        idx = rest.find("-")
+        return rest[idx + 1:] if idx >= 0 else rest
+    return release_dir
+
+
+def _collect_known_namespaces(manifests: dict[str, list[dict]]) -> set[str]:
+    """Collect all namespaces seen in manifests (declared + referenced)."""
+    known = {m.get("metadata", {}).get("name", "")
+             for m in manifests.get("Namespace", [])} - {""}
+    for kind_list in manifests.values():
+        for m in kind_list:
+            ns = m.get("metadata", {}).get("namespace", "")
+            if ns:
+                known.add(ns)
+    return known
+
+
+def _infer_namespaces(manifests: dict[str, list[dict]],
+                      release_ns_map: dict[str, str] | None = None) -> None:
+    """Fill missing ``metadata.namespace`` from sibling manifests or *release_ns_map*.
+
+    Strategy (each phase fills gaps left by the previous):
+    1. Sibling inference — any manifest in the same release dir that has a namespace
+    2. Namespace/release matching — match release name against known namespaces
+    3. ``helmfile list`` data — from *release_ns_map* (only when using ``--helmfile-dir``)
+    """
+    # Single pass: collect release dirs + build sibling namespace map
+    all_release_dirs: set[str] = set()
+    dir_ns: dict[str, str] = {}
+    for kind_list in manifests.values():
+        for m in kind_list:
+            rd = m.get("_h2c_release_dir", "")
+            if rd:
+                all_release_dirs.add(rd)
+                ns = m.get("metadata", {}).get("namespace", "")
+                if ns and rd not in dir_ns:
+                    dir_ns[rd] = ns
+
+    # Match unresolved dirs against known namespaces, then helmfile list
+    known_ns = _collect_known_namespaces(manifests)
+    for rd in all_release_dirs - dir_ns.keys():
+        release_name = _extract_release_name(rd)
+        if release_name in known_ns:
+            dir_ns[rd] = release_name
+        elif release_ns_map and release_name in release_ns_map:
+            dir_ns[rd] = release_ns_map[release_name]
+
+    # Inject into manifests missing namespace
+    for kind_list in manifests.values():
+        for m in kind_list:
+            if not m.get("metadata", {}).get("namespace", ""):
+                rd = m.get("_h2c_release_dir", "")
+                if rd in dir_ns:
+                    m.setdefault("metadata", {})["namespace"] = dir_ns[rd]
 
 
 # ---------------------------------------------------------------------------
@@ -180,12 +277,6 @@ def _full_name(manifest: dict) -> str:
     """Return 'Kind/name' string for use in warning messages."""
     meta = manifest.get("metadata", {})
     return f"{manifest.get('kind', '?')}/{meta.get('name', '?')}"
-
-
-def rewrite_k8s_dns(text: str) -> tuple[str, int]:
-    """Replace <svc>.<ns>.svc.cluster.local with just <svc>. Returns (text, count)."""
-    result, count = _K8S_DNS_RE.subn(r'\1', text)
-    return result, count
 
 
 def _resolve_host_path(host_path: str, volume_root: str) -> str:
@@ -361,68 +452,37 @@ def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict) -> lis
     return env_vars
 
 
-def _rewrite_k8s_dns_in_env(env_vars: list[dict], workload_name: str,
-                            warnings: list[str]) -> None:
-    """Rewrite K8s internal DNS references in env var values."""
-    total_rewrites = 0
-    for ev in env_vars:
-        if ev["value"] is not None and isinstance(ev["value"], str):
-            rewritten, count = rewrite_k8s_dns(ev["value"])
-            if count:
-                ev["value"] = rewritten
-                total_rewrites += count
-    if total_rewrites:
-        warnings.append(
-            f"{workload_name}: rewrote {total_rewrites} K8s DNS reference(s) "
-            f"(*.svc.cluster.local → service name)"
-        )
-
-
 def _postprocess_env(services: dict, ctx) -> None:
-    """Apply DNS rewriting, alias/port resolution, and replacements to all services.
+    """Apply port remapping and replacements to all services.
 
     This catches operator-produced services that bypass WorkloadConverter's
     per-env-var rewriting. Safe to run on already-processed services (idempotent).
     """
-    for svc_name, svc in services.items():
+    for _svc_name, svc in services.items():
         env = svc.get("environment")
         if not env or not isinstance(env, dict):
             continue
-        rewrites = 0
         for key in list(env):
             val = env[key]
             if not isinstance(val, str):
                 continue
             original = val
-            val, count = rewrite_k8s_dns(val)
-            rewrites += count
             if ctx.service_port_map:
                 val = _apply_port_remap(val, ctx.service_port_map)
-            if ctx.alias_map:
-                val = _apply_alias_map(val, ctx.alias_map)
             if ctx.replacements:
                 val = _apply_replacements(val, ctx.replacements)
             if val != original:
                 env[key] = val
-        if rewrites:
-            ctx.warnings.append(
-                f"Service/{svc_name}: rewrote {rewrites} K8s DNS reference(s) "
-                f"(*.svc.cluster.local → service name)")
 
 
-def _rewrite_env_values(env_vars: list[dict], workload_name: str, warnings: list[str],
+def _rewrite_env_values(env_vars: list[dict],
                         replacements: list[dict] | None = None,
-                        alias_map: dict[str, str] | None = None,
                         service_port_map: dict | None = None) -> None:
-    """Apply DNS rewriting, port remapping, alias resolution, and replacements to env values."""
-    _rewrite_k8s_dns_in_env(env_vars, workload_name, warnings)
-
-    # Apply transforms: port remap → alias resolve → user replacements
+    """Apply port remapping and replacements to env values."""
+    # Apply transforms: port remap → user replacements
     transforms = []
     if service_port_map:
         transforms.append(lambda v: _apply_port_remap(v, service_port_map))
-    if alias_map:
-        transforms.append(lambda v: _apply_alias_map(v, alias_map))
     if replacements:
         transforms.append(lambda v: _apply_replacements(v, replacements))
     for ev in env_vars:
@@ -434,7 +494,6 @@ def _rewrite_env_values(env_vars: list[dict], workload_name: str, warnings: list
 def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str, dict],
                 workload_name: str, warnings: list[str],
                 replacements: list[dict] | None = None,
-                alias_map: dict[str, str] | None = None,
                 service_port_map: dict | None = None) -> list[dict]:
     """Resolve env and envFrom into a flat list of {name: ..., value: ...}."""
     env_vars: list[dict] = []
@@ -446,8 +505,7 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
 
     env_vars.extend(_resolve_envfrom(container.get("envFrom") or [], configmaps, secrets))
 
-    _rewrite_env_values(env_vars, workload_name, warnings,
-                        replacements=replacements, alias_map=alias_map,
+    _rewrite_env_values(env_vars, replacements=replacements,
                         service_port_map=service_port_map)
     return env_vars
 
@@ -482,7 +540,7 @@ def _build_aux_service(container: dict, pod_spec: dict, label: str,
     if container.get("image"):
         svc["image"] = container["image"]
     env_list = resolve_env(container, ctx.configmaps, ctx.secrets, label, ctx.warnings,
-                           replacements=ctx.replacements, alias_map=ctx.alias_map,
+                           replacements=ctx.replacements,
                            service_port_map=ctx.service_port_map)
     env_dict = {e["name"]: str(e["value"]) if e["value"] is not None else ""
                 for e in env_list}
@@ -495,7 +553,7 @@ def _build_aux_service(container: dict, pod_spec: dict, label: str,
         configmaps=ctx.configmaps, secrets=ctx.secrets,
         output_dir=ctx.output_dir, generated_cms=ctx.generated_cms,
         generated_secrets=ctx.generated_secrets, replacements=ctx.replacements,
-        alias_map=ctx.alias_map, service_port_map=ctx.service_port_map,
+        service_port_map=ctx.service_port_map,
         volume_claim_templates=vcts)
     if volumes:
         svc["volumes"] = volumes
@@ -619,7 +677,7 @@ class WorkloadConverter:
 
         # Environment (resolve before command so $(VAR) refs can be inlined)
         env_list = resolve_env(container, ctx.configmaps, ctx.secrets, full, ctx.warnings,
-                               replacements=ctx.replacements, alias_map=ctx.alias_map,
+                               replacements=ctx.replacements,
                                service_port_map=ctx.service_port_map)
         env_dict = {e["name"]: str(e["value"]) if e["value"] is not None else ""
                     for e in env_list}
@@ -642,7 +700,7 @@ class WorkloadConverter:
             configmaps=ctx.configmaps, secrets=ctx.secrets,
             output_dir=ctx.output_dir,
             generated_cms=ctx.generated_cms, generated_secrets=ctx.generated_secrets,
-            replacements=ctx.replacements, alias_map=ctx.alias_map,
+            replacements=ctx.replacements,
             service_port_map=ctx.service_port_map,
             volume_claim_templates=vcts)
         if svc_volumes:
@@ -743,7 +801,6 @@ def _build_alias_map(manifests: dict, services_by_selector: dict) -> dict[str, s
 def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
                               generated_cms: set, warnings: list[str],
                               replacements: list[dict] | None = None,
-                              alias_map: dict[str, str] | None = None,
                               service_port_map: dict | None = None) -> str:
     """Write ConfigMap data entries as files. Returns the directory path (relative)."""
     rel_dir = os.path.join("configmaps", cm_name)
@@ -752,15 +809,9 @@ def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
         generated_cms.add(cm_name)
         os.makedirs(abs_dir, exist_ok=True)
         for key, value in cm_data.items():
-            rewritten, count = rewrite_k8s_dns(str(value))
-            if count:
-                warnings.append(
-                    f"ConfigMap '{cm_name}' key '{key}': rewrote {count} K8s DNS reference(s)"
-                )
+            rewritten = str(value)
             if service_port_map:
                 rewritten = _apply_port_remap(rewritten, service_port_map)
-            if alias_map:
-                rewritten = _apply_alias_map(rewritten, alias_map)
             if replacements:
                 rewritten = _apply_replacements(rewritten, replacements)
             file_path = os.path.join(abs_dir, key)
@@ -867,7 +918,6 @@ def _convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: se
                            output_dir: str = ".", generated_cms: set | None = None,
                            generated_secrets: set | None = None,
                            replacements: list[dict] | None = None,
-                           alias_map: dict[str, str] | None = None,
                            service_port_map: dict | None = None,
                            volume_claim_templates: list | None = None) -> list[str]:
     """Convert volumeMounts to docker-compose volume strings."""
@@ -889,7 +939,7 @@ def _convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: se
                 continue
             cm_dir = _generate_configmap_files(source["name"], cm.get("data", {}),
                                                output_dir, generated_cms, warnings,
-                                               replacements=replacements, alias_map=alias_map,
+                                               replacements=replacements,
                                                service_port_map=service_port_map)
             result.append(_convert_data_mount(cm_dir, vm))
         elif vol_type == "secret" and secrets is not None:
@@ -903,6 +953,35 @@ def _convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: se
             result.append(_convert_data_mount(sec_dir, vm))
 
     return result
+
+
+def _build_network_aliases(services_by_selector: dict,
+                           alias_map: dict[str, str]) -> dict[str, list[str]]:
+    """Build Docker Compose network aliases for each compose service.
+
+    For each K8s Service, resolve its compose service name (via alias_map or
+    direct match) and add FQDN aliases (svc.ns.svc.cluster.local, svc.ns.svc,
+    svc.ns) plus a short alias if the K8s Service name differs from the compose
+    service name.
+
+    Returns {compose_service_name: [alias1, alias2, ...]}.
+    """
+    aliases: dict[str, list[str]] = {}
+    for svc_name, svc_info in services_by_selector.items():
+        ns = svc_info.get("namespace", "")
+        compose_name = alias_map.get(svc_name, svc_name)
+        svc_aliases = aliases.setdefault(compose_name, [])
+        # Short alias: K8s Service name if it differs from the compose service
+        if svc_name != compose_name and svc_name not in svc_aliases:
+            svc_aliases.append(svc_name)
+        # FQDN variants (only if namespace is known)
+        if ns:
+            for fqdn in (f"{svc_name}.{ns}.svc.cluster.local",
+                         f"{svc_name}.{ns}.svc",
+                         f"{svc_name}.{ns}"):
+                if fqdn not in svc_aliases:
+                    svc_aliases.append(fqdn)
+    return aliases
 
 
 def _build_service_port_map(manifests: dict, services_by_selector: dict) -> dict:
@@ -940,6 +1019,19 @@ def _build_service_port_map(manifests: dict, services_by_selector: dict) -> dict
             if sp.get("name"):
                 port_map[(svc_name, sp["name"])] = target
 
+    # Add FQDN variants so _apply_port_remap matches both "svc:80" and
+    # "svc.ns.svc.cluster.local:80"
+    fqdn_entries: dict = {}
+    for (svc_name, svc_port), container_port in port_map.items():
+        ns = services_by_selector.get(svc_name, {}).get("namespace", "")
+        if not ns:
+            continue
+        for fqdn in (f"{svc_name}.{ns}.svc.cluster.local",
+                     f"{svc_name}.{ns}.svc",
+                     f"{svc_name}.{ns}"):
+            fqdn_entries[(fqdn, svc_port)] = container_port
+    port_map.update(fqdn_entries)
+
     return port_map
 
 
@@ -964,11 +1056,13 @@ def _extract_strip_prefix(annotations: dict, path: str) -> str | None:
 
 
 def _convert_one_ingress(manifest: dict, service_port_map: dict,
-                         alias_map: dict[str, str] | None = None) -> list[dict]:
+                         alias_map: dict[str, str] | None = None,
+                         services_by_selector: dict | None = None) -> list[dict]:
     """Convert a single Ingress manifest to Caddyfile entries."""
     entries = []
     meta = manifest.get("metadata", {})
     annotations = meta.get("annotations", {})
+    ns = meta.get("namespace", "")
     spec = manifest.get("spec", {})
     rules = spec.get("rules", [])
     tls_hosts = set()
@@ -999,6 +1093,13 @@ def _convert_one_ingress(manifest: dict, service_port_map: dict,
             # Resolve to container port (Service port → targetPort → containerPort)
             container_port = service_port_map.get((svc_name, svc_port), svc_port)
 
+            # Upstream uses FQDN: compose DNS resolves it via network aliases
+            svc_ns = (services_by_selector or {}).get(svc_name, {}).get("namespace", "") or ns
+            if svc_ns:
+                upstream_host = f"{svc_name}.{svc_ns}.svc.cluster.local"
+            else:
+                upstream_host = compose_name
+
             # Upstream scheme: detect backend SSL from ingress annotations
             backend_ssl = (
                 annotations.get("haproxy.org/server-ssl", "").lower() == "true"
@@ -1013,21 +1114,15 @@ def _convert_one_ingress(manifest: dict, service_port_map: dict,
             if backend_ssl and server_ca_ref:
                 # Extract secret name (ignore namespace prefix)
                 server_ca_secret = server_ca_ref.split("/")[-1]
-            # TLS server name: haproxy.org/server-sni is the K8s FQDN
-            # the backend expects (matches wildcard cert SANs)
+            # TLS server name: only set when explicitly specified in annotation
             server_sni = ""
             if backend_ssl and server_ca_ref:
                 server_sni = annotations.get("haproxy.org/server-sni", "")
-                if not server_sni:
-                    ns = meta.get("namespace", "")
-                    if ns:
-                        server_sni = (f"{compose_name}.{ns}"
-                                      f".svc.cluster.local")
             strip_prefix = _extract_strip_prefix(annotations, path)
             entries.append({
                 "host": host,
                 "path": path,
-                "upstream": f"{compose_name}:{container_port}",
+                "upstream": f"{upstream_host}:{container_port}",
                 "scheme": scheme,
                 "server_ca_secret": server_ca_secret,
                 "server_sni": server_sni,
@@ -1045,7 +1140,8 @@ class IngressConverter:
         entries = []
         for m in manifests:
             entries.extend(_convert_one_ingress(m, ctx.service_port_map,
-                                                alias_map=ctx.alias_map))
+                                                alias_map=ctx.alias_map,
+                                                services_by_selector=ctx.services_by_selector))
         services = {}
         if entries and not ctx.config.get("disableCaddy"):
             volume_root = ctx.config.get("volume_root", "./data")
@@ -1182,6 +1278,7 @@ def _index_manifests(manifests: dict) -> tuple[dict, dict, dict]:
         svc_name = svc_meta.get("name", "")
         services_by_selector[svc_name] = {
             "name": svc_name,
+            "namespace": svc_meta.get("namespace", ""),
             "selector": svc_spec.get("selector", {}),
             "type": svc_spec.get("type", "ClusterIP"),
             "ports": svc_spec.get("ports", []),
@@ -1315,9 +1412,30 @@ def convert(manifests: dict[str, list[dict]], config: dict,
             compose_services.update(result.services)
             caddy_entries.extend(result.caddy_entries)
 
-    # Post-process all services: DNS rewriting, alias resolution, replacements.
+    # Post-process all services: port remapping and replacements.
     # Idempotent — safe on services already processed by WorkloadConverter.
     _postprocess_env(compose_services, ctx)
+
+    # Add network aliases so K8s FQDNs resolve via compose DNS
+    network_aliases = _build_network_aliases(ctx.services_by_selector, ctx.alias_map)
+    for svc_name, svc_aliases in network_aliases.items():
+        if svc_name in compose_services and "network_mode" not in compose_services[svc_name]:
+            if svc_aliases:
+                compose_services[svc_name]["networks"] = {"default": {"aliases": svc_aliases}}
+
+    # Warn for generated services that have no FQDN aliases (missing namespace)
+    for svc_name in compose_services:
+        if "network_mode" in compose_services[svc_name]:
+            continue  # sidecars don't get aliases
+        aliases = network_aliases.get(svc_name, [])
+        has_fqdn = any(".svc.cluster.local" in a for a in aliases)
+        if not has_fqdn and svc_name in ctx.services_by_selector:
+            warnings.append(
+                f"service '{svc_name}' has no FQDN aliases (namespace unknown) — "
+                f"other services referencing it by FQDN will fail to resolve. "
+                f"Fix your helmfile: add {{{{ .Release.Namespace }}}} to the "
+                f"chart's metadata.namespace, or use --helmfile-dir."
+            )
 
     # Register discovered PVCs
     for pvc in sorted(pvc_names):
@@ -1504,13 +1622,16 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Step 1: get rendered manifests
+    release_ns_map: dict[str, str] | None = None
     if args.from_dir:
         rendered_dir = args.from_dir
     else:
-        rendered_dir = run_helmfile_template(args.helmfile_dir, args.output_dir, args.environment)
+        rendered_dir, release_ns_map = run_helmfile_template(
+            args.helmfile_dir, args.output_dir, args.environment)
 
     # Step 2: parse
     manifests = parse_manifests(rendered_dir)
+    _infer_namespaces(manifests, release_ns_map)
     kinds = {k: len(v) for k, v in manifests.items()}
     print(f"Parsed manifests: {kinds}", file=sys.stderr)
 

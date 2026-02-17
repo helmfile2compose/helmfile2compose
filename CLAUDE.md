@@ -117,14 +117,14 @@ services:                 # custom services added to compose (not from K8s)
 
 ### Automatic rewrites
 
-- **K8s DNS** — `<svc>.<ns>.svc.cluster.local` and `<svc>.<ns>.svc` rewritten to compose service names
-- **Service aliases** — K8s Services whose name differs from the workload are resolved through the alias chain
-- **Port remapping** — K8s Service port → container port in URLs and env vars
+- **Network aliases** — each service gets `networks.default.aliases` with K8s FQDN variants (`svc.ns.svc.cluster.local`, `svc.ns.svc`, `svc.ns`). FQDNs resolve natively via compose DNS — no hostname rewriting. Requires Docker Compose (nerdctl does not support network aliases).
+- **Service aliases** — K8s Services whose name differs from the workload get a short alias on the compose service
+- **Port remapping** — K8s Service port → container port in URLs and env vars (FQDN variants also matched)
 - **Kubelet `$(VAR)`** — resolved from container env vars at generation time
 - **Shell `$VAR` escaping** — escaped to `$$VAR` for compose
 - **String replacements** — user-defined `replacements:` applied to env vars, ConfigMap files, and Caddyfile upstreams
 - **`status.podIP` fieldRef** — resolved to compose service name
-- **Post-process env** — DNS rewriting, alias/port resolution applied to all services including operator-produced ones (idempotent)
+- **Post-process env** — port remapping and replacements applied to all services including operator-produced ones (idempotent)
 
 ### Tested with
 

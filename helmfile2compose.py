@@ -286,7 +286,7 @@ def _resolve_host_path(host_path: str, volume_root: str) -> str:
     return f"{volume_root}/{host_path}"
 
 
-def _apply_replacements(text: str, replacements: list[dict]) -> str:
+def apply_replacements(text: str, replacements: list[dict]) -> str:
     """Apply user-defined string replacements from config."""
     for r in replacements:
         text = text.replace(r["old"], r["new"])
@@ -470,7 +470,7 @@ def _postprocess_env(services: dict, ctx) -> None:
             if ctx.service_port_map:
                 val = _apply_port_remap(val, ctx.service_port_map)
             if ctx.replacements:
-                val = _apply_replacements(val, ctx.replacements)
+                val = apply_replacements(val, ctx.replacements)
             if val != original:
                 env[key] = val
 
@@ -484,7 +484,7 @@ def _rewrite_env_values(env_vars: list[dict],
     if service_port_map:
         transforms.append(lambda v: _apply_port_remap(v, service_port_map))
     if replacements:
-        transforms.append(lambda v: _apply_replacements(v, replacements))
+        transforms.append(lambda v: apply_replacements(v, replacements))
     for ev in env_vars:
         if ev["value"] is not None and isinstance(ev["value"], str):
             for transform in transforms:
@@ -813,7 +813,7 @@ def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
             if service_port_map:
                 rewritten = _apply_port_remap(rewritten, service_port_map)
             if replacements:
-                rewritten = _apply_replacements(rewritten, replacements)
+                rewritten = apply_replacements(rewritten, replacements)
             file_path = os.path.join(abs_dir, key)
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(rewritten)
@@ -854,7 +854,7 @@ def _generate_secret_files(sec_name: str, secret: dict, items: list | None,
                 warnings.append(f"Secret '{sec_name}' key '{key}' could not be decoded — skipped")
                 continue
             if replacements:
-                val = _apply_replacements(val, replacements)
+                val = apply_replacements(val, replacements)
             with open(os.path.join(abs_dir, out_name), "w", encoding="utf-8") as f:
                 f.write(val)
     return f"./{rel_dir}"

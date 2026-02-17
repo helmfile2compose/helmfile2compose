@@ -60,12 +60,13 @@ Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--
 
 CRD conversion is extensible via external extension modules. `--extensions-dir` points to a directory of `.py` files (or cloned repos with `.py` files one level deep). Each module provides converter classes with `kinds` and `convert()` — same interface as built-in converters. Loaded extensions sorted by `priority` (lower = earlier, default 100), inserted before built-in converters.
 
-Operators import `ConvertContext`/`ConvertResult` from `helmfile2compose`. Available operators:
+Operators import `ConvertContext`/`ConvertResult` from `helmfile2compose`. `apply_replacements(text, replacements)` and `resolve_env(container, configmaps, secrets, workload_name, warnings, replacements=None, service_port_map=None)` are also public — available to operators that need string replacement or env resolution. Available operators:
 - **keycloak** — `Keycloak`, `KeycloakRealmImport` (priority 50)
 - **cert-manager** — `Certificate`, `ClusterIssuer`, `Issuer` (priority 10, requires `cryptography`)
 - **trust-manager** — `Bundle` (priority 20, depends on cert-manager)
+- **servicemonitor** — `Prometheus`, `ServiceMonitor` (priority 60, requires `pyyaml`)
 
-Install via h2c-manager: `python3 h2c-manager.py keycloak cert-manager trust-manager`
+Install via h2c-manager: `python3 h2c-manager.py keycloak cert-manager trust-manager servicemonitor`
 
 ### Config file (`helmfile2compose.yaml`)
 

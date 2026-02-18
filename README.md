@@ -8,7 +8,7 @@
 
 *The core converter script for [helmfile2compose](https://github.com/helmfile2compose). Patient zero.*
 
-This is where it started — a single Python script, born from the unholy request to make Kubernetes run without Kubernetes. It worked. That was the worst possible outcome. From this aberration, an [entire ecosystem](https://github.com/helmfile2compose) grew: a package manager, CRD operators, documentation — a temple built for the sole purpose of dismantling a greater and more beautiful one.
+This is where it started — a single Python script, born from the unholy request to make Kubernetes run without Kubernetes. It worked. That was the worst possible outcome. From this aberration, an [entire ecosystem](https://github.com/helmfile2compose) grew: a package manager, CRD extensions, documentation — a temple built for the sole purpose of dismantling a greater and more beautiful one.
 
 Core of the problem: feed it Kubernetes manifests (from `helmfile template`, `helm template`, `kustomize build`, whatever produced them) and it will spit out a `compose.yml` and a `Caddyfile`. Not Kubernetes-in-Docker — no cluster, no kubelet, no shim. Plain `docker compose up`.
 
@@ -26,7 +26,7 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir .
 docker compose up -d
 ```
 
-If your stack uses CRDs (Keycloak, cert-manager, trust-manager), grab the operator `.py` files from their repos, drop them in a directory, and pass `--extensions-dir` to the script. For managing extensions and automating downloads, see [h2c-manager](https://github.com/helmfile2compose/h2c-manager).
+If your stack uses CRDs (Keycloak, cert-manager, trust-manager), grab the extension `.py` files from their repos, drop them in a directory, and pass `--extensions-dir` to the script. For managing extensions and automating downloads, see [h2c-manager](https://github.com/helmfile2compose/h2c-manager).
 
 ## Requirements
 
@@ -47,7 +47,7 @@ If your stack uses CRDs (Keycloak, cert-manager, trust-manager), grab the operat
 
 Init containers, sidecars, fix-permissions services, and hostname truncation are handled automatically.
 
-CRDs (Keycloak, cert-manager, trust-manager) are handled by [external operators](https://helmfile2compose.github.io/extensions/) via `--extensions-dir`.
+CRDs (Keycloak, cert-manager, trust-manager) are handled by [external extensions](https://helmfile2compose.github.io/extensions/) via `--extensions-dir`.
 
 ## Output files
 
@@ -66,10 +66,10 @@ Full docs at [helmfile2compose.github.io](https://helmfile2compose.github.io).
 |------|-------------|
 | [h2c-manager](https://github.com/helmfile2compose/h2c-manager) | Package manager + extension registry |
 | [helmfile2compose.github.io](https://github.com/helmfile2compose/helmfile2compose.github.io) | Documentation site |
-| [h2c-operator-keycloak](https://github.com/helmfile2compose/h2c-operator-keycloak) | Keycloak CRD converter |
-| [h2c-operator-cert-manager](https://github.com/helmfile2compose/h2c-operator-cert-manager) | cert-manager CRD converter |
-| [h2c-operator-trust-manager](https://github.com/helmfile2compose/h2c-operator-trust-manager) | trust-manager CRD converter |
-| [h2c-operator-servicemonitor](https://github.com/helmfile2compose/h2c-operator-servicemonitor) | Prometheus & ServiceMonitor CRD converter |
+| [h2c-provider-keycloak](https://github.com/helmfile2compose/h2c-provider-keycloak) | Keycloak CRD provider |
+| [h2c-converter-cert-manager](https://github.com/helmfile2compose/h2c-converter-cert-manager) | cert-manager CRD converter |
+| [h2c-converter-trust-manager](https://github.com/helmfile2compose/h2c-converter-trust-manager) | trust-manager CRD converter |
+| [h2c-provider-servicemonitor](https://github.com/helmfile2compose/h2c-provider-servicemonitor) | Prometheus & ServiceMonitor CRD provider |
 
 ## License
 

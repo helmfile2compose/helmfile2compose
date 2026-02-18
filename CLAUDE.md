@@ -5,7 +5,7 @@ Convert `helmfile template` output to `compose.yml` + `Caddyfile`.
 Part of the [helmfile2compose](https://github.com/helmfile2compose) org. This repo contains the core converter script only. Related repos:
 - [h2c-manager](https://github.com/helmfile2compose/h2c-manager) — package manager + extension registry (`extensions.json`)
 - [helmfile2compose.github.io](https://github.com/helmfile2compose/helmfile2compose.github.io) — full documentation site
-- Operator repos: [h2c-operator-keycloak](https://github.com/helmfile2compose/h2c-operator-keycloak), [h2c-operator-cert-manager](https://github.com/helmfile2compose/h2c-operator-cert-manager), [h2c-operator-trust-manager](https://github.com/helmfile2compose/h2c-operator-trust-manager)
+- Extension repos: [h2c-provider-keycloak](https://github.com/helmfile2compose/h2c-provider-keycloak), [h2c-provider-servicemonitor](https://github.com/helmfile2compose/h2c-provider-servicemonitor), [h2c-converter-cert-manager](https://github.com/helmfile2compose/h2c-converter-cert-manager), [h2c-converter-trust-manager](https://github.com/helmfile2compose/h2c-converter-trust-manager)
 
 ## Workflow
 
@@ -26,7 +26,7 @@ python3 helmfile2compose.py --helmfile-dir ~/my-platform -e compose --output-dir
 # From pre-rendered manifests (skip helmfile)
 python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir .
 
-# With external operators
+# With extensions
 python3 helmfile2compose.py --helmfile-dir ~/my-platform -e compose \
   --extensions-dir .h2c/extensions --output-dir .
 ```
@@ -53,27 +53,29 @@ Flags: `--helmfile-dir`, `-e`/`--environment`, `--from-dir`, `--output-dir`, `--
 - **Fix-permissions** → auto-generated for non-root containers with PVC bind mounts (`chown -R <uid>`)
 - **Hostname truncation** → services >63 chars get explicit `hostname:` to avoid sethostname failures
 - Warns on stderr for: resource limits, HPA, CronJob, PDB, unknown kinds
-- Silently ignores: RBAC, ServiceAccounts, NetworkPolicies, CRDs (unless claimed by a loaded operator), IngressClass, Webhooks, Namespaces
+- Silently ignores: RBAC, ServiceAccounts, NetworkPolicies, CRDs (unless claimed by a loaded extension), IngressClass, Webhooks, Namespaces
 - Writes `compose.yml` (configurable via `--compose-file`), `Caddyfile` (or `Caddyfile-<project>` when `disableCaddy: true`), `helmfile2compose.yaml`
 
 ### External extensions (`--extensions-dir`)
 
 Three extension types, loaded from the same `--extensions-dir`:
 
-- **Converters** — classes with `kinds` and `convert()`. Produce compose services from K8s manifests. Sorted by `priority` (lower = earlier, default 100), inserted before built-in converters.
+- **Converters** — classes with `kinds` and `convert()`. Produce synthetic resources and/or compose services from K8s manifests. Sorted by `priority` (lower = earlier, default 100), inserted before built-in converters. Naming convention: `h2c-converter-*` for resource-only, `h2c-provider-*` for service-producing.
 - **Transforms** — classes with `transform(compose_services, caddy_entries, ctx)` and no `kinds`. Post-process the final compose output after alias injection. Sorted by `priority` (default 100).
 - **Ingress rewriters** — classes with `name`, `match()`, and `rewrite()`. Translate controller-specific Ingress annotations to Caddy entries. Same `name` replaces built-in. Sorted by `priority` (default 100).
 
 `--extensions-dir` points to a directory of `.py` files (or cloned repos with `.py` files one level deep). The loader detects each type automatically.
 
-Operators import `ConvertContext`/`ConvertResult`/`IngressRewriter` from `helmfile2compose`. `get_ingress_class(manifest, ingress_types)` and `resolve_backend(path_entry, manifest, ctx)` are public helpers for rewriters. `apply_replacements(text, replacements)` and `resolve_env(container, configmaps, secrets, workload_name, warnings, replacements=None, service_port_map=None)` are also public — available to operators that need string replacement or env resolution. Available extensions:
-- **keycloak** — converter: `Keycloak`, `KeycloakRealmImport` (priority 50)
+Extensions import `ConvertContext`/`ConvertResult`/`IngressRewriter` from `helmfile2compose`. `get_ingress_class(manifest, ingress_types)` and `resolve_backend(path_entry, manifest, ctx)` are public helpers for rewriters. `apply_replacements(text, replacements)` and `resolve_env(container, configmaps, secrets, workload_name, warnings, replacements=None, service_port_map=None)` are also public — available to extensions that need string replacement or env resolution. Available extensions:
+- **keycloak** — provider: `Keycloak`, `KeycloakRealmImport` (priority 50)
 - **cert-manager** — converter: `Certificate`, `ClusterIssuer`, `Issuer` (priority 10, requires `cryptography`)
 - **trust-manager** — converter: `Bundle` (priority 20, depends on cert-manager)
-- **servicemonitor** — converter: `Prometheus`, `ServiceMonitor` (priority 60, requires `pyyaml`)
+- **servicemonitor** — provider: `Prometheus`, `ServiceMonitor` (priority 60, requires `pyyaml`)
 - **flatten-internal-urls** — transform: strip aliases, rewrite FQDNs (priority 200, incompatible with cert-manager)
+- **nginx** — ingress rewriter: Nginx annotations (rewrite-target, backend-protocol, CORS, proxy-body-size)
+- **traefik** — ingress rewriter: Traefik annotations (router.tls, standard path rules). POC.
 
-Install via h2c-manager: `python3 h2c-manager.py keycloak cert-manager trust-manager servicemonitor flatten-internal-urls`
+Install via h2c-manager: `python3 h2c-manager.py keycloak cert-manager trust-manager servicemonitor flatten-internal-urls nginx traefik`
 
 ### Config file (`helmfile2compose.yaml`)
 
@@ -133,7 +135,7 @@ services:                 # custom services added to compose (not from K8s)
 - **Shell `$VAR` escaping** — escaped to `$$VAR` for compose
 - **String replacements** — user-defined `replacements:` applied to env vars, ConfigMap files, and Caddyfile upstreams
 - **`status.podIP` fieldRef** — resolved to compose service name
-- **Post-process env** — port remapping and replacements applied to all services including operator-produced ones (idempotent)
+- **Post-process env** — port remapping and replacements applied to all services including extension-produced ones (idempotent)
 
 ### Tested with
 

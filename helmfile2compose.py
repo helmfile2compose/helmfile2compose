@@ -80,6 +80,7 @@ IGNORED_KINDS = (
 
 # K8s kinds that produce compose services (iterated together everywhere)
 WORKLOAD_KINDS = ("DaemonSet", "Deployment", "Job", "StatefulSet")
+_WELL_KNOWN_PORTS = {"http": 80, "https": 443, "grpc": 50051}
 
 # Kinds indexed during pre-processing (not dispatched to converters)
 _INDEXED_KINDS = {"ConfigMap", "Secret", "Service", "PersistentVolumeClaim"}
@@ -143,6 +144,19 @@ def run_helmfile_template(helmfile_dir: str, output_dir: str,
     cmd.extend(["template", "--output-dir", rendered_dir])
     print(f"Running: {' '.join(cmd)}", file=sys.stderr)
     subprocess.run(cmd, check=True)
+    # Nested helmfiles: helmfile creates per-child .helmfile-rendered dirs
+    # instead of putting everything in the --output-dir target. Consolidate.
+    helmfile_root = Path(helmfile_dir).resolve()
+    main_rendered = Path(rendered_dir).resolve()
+    for nested in sorted(helmfile_root.rglob(".helmfile-rendered")):
+        if nested.resolve() == main_rendered:
+            continue
+        for yaml_file in nested.rglob("*.yaml"):
+            rel = yaml_file.relative_to(nested)
+            dest = main_rendered / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(yaml_file, dest)
+        shutil.rmtree(nested)
     release_ns_map = _helmfile_list_namespaces(helmfile_path, environment)
     return rendered_dir, release_ns_map
 
@@ -382,11 +396,11 @@ def _escape_shell_vars_for_compose(obj):
 def _secret_value(secret: dict, key: str) -> str | None:
     """Get a decoded value from a K8s Secret (base64 data or plain stringData)."""
     # stringData is plain text (rare in rendered output, but possible)
-    val = secret.get("stringData", {}).get(key)
+    val = (secret.get("stringData") or {}).get(key)
     if val is not None:
         return val
     # data is base64-encoded
-    val = secret.get("data", {}).get(key)
+    val = (secret.get("data") or {}).get(key)
     if val is not None:
         try:
             return base64.b64decode(val).decode("utf-8")
@@ -406,7 +420,7 @@ def _resolve_env_entry(entry: dict, configmaps: dict, secrets: dict,
     vf = entry["valueFrom"]
     if "configMapKeyRef" in vf:
         ref = vf["configMapKeyRef"]
-        val = configmaps.get(ref.get("name", ""), {}).get("data", {}).get(ref.get("key", ""))
+        val = (configmaps.get(ref.get("name", ""), {}).get("data") or {}).get(ref.get("key", ""))
         if val is not None:
             return {"name": name, "value": val}
         warnings.append(
@@ -444,11 +458,11 @@ def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict) -> lis
     for ef in envfrom_list:
         if "configMapRef" in ef:
             cm = configmaps.get(ef["configMapRef"].get("name", ""), {})
-            for k, v in cm.get("data", {}).items():
+            for k, v in (cm.get("data") or {}).items():
                 env_vars.append({"name": k, "value": v})
         elif "secretRef" in ef:
             sec = secrets.get(ef["secretRef"].get("name", ""), {})
-            for k in sec.get("data", {}):
+            for k in sec.get("data") or {}:
                 val = _secret_value(sec, k)
                 if val is not None:
                     env_vars.append({"name": k, "value": val})
@@ -528,7 +542,7 @@ def _convert_command(container: dict, env_dict: dict[str, str]) -> dict:
 
 def _get_run_as_user(pod_spec: dict, container: dict) -> int | None:
     """Extract runAsUser from container or pod securityContext (container wins)."""
-    for ctx in (container.get("securityContext", {}), pod_spec.get("securityContext", {})):
+    for ctx in (container.get("securityContext") or {}, pod_spec.get("securityContext") or {}):
         uid = ctx.get("runAsUser")
         if uid is not None:
             return int(uid)
@@ -567,7 +581,7 @@ def _convert_init_containers(pod_spec: dict, name: str, ctx: ConvertContext,
                              vcts: list | None = None) -> dict:
     """Convert init containers to separate compose services with restart: on-failure."""
     result = {}
-    for ic in pod_spec.get("initContainers", []):
+    for ic in pod_spec.get("initContainers") or []:
         ic_name = ic.get("name", "init")
         ic_svc_name = f"{name}-init-{ic_name}"
         if _is_excluded(ic_svc_name, ctx.config.get("exclude", [])):
@@ -585,7 +599,7 @@ def _convert_sidecar_containers(pod_spec: dict, name: str, ctx: ConvertContext,
     result = {}
     project = ctx.config.get("name", "")
     cn = f"{project}-{name}" if project else name
-    for sc in pod_spec.get("containers", [])[1:]:
+    for sc in (pod_spec.get("containers") or [])[1:]:
         sc_name = sc.get("name", "sidecar")
         sc_svc_name = f"{name}-sidecar-{sc_name}"
         if _is_excluded(sc_svc_name, ctx.config.get("exclude", [])):
@@ -645,10 +659,10 @@ class WorkloadConverter:
             ctx.warnings.append(f"{full} has replicas: 0 — skipped")
             return None
 
-        spec = manifest.get("spec", {})
-        pod_spec = spec.get("template", {}).get("spec", {})
+        spec = manifest.get("spec") or {}
+        pod_spec = (spec.get("template") or {}).get("spec") or {}
         vcts = spec.get("volumeClaimTemplates")  # StatefulSet only
-        containers = pod_spec.get("containers", [])
+        containers = pod_spec.get("containers") or []
         if not containers:
             ctx.warnings.append(f"{full} has no containers — skipped")
             return None
@@ -690,8 +704,8 @@ class WorkloadConverter:
             svc["environment"] = env_dict
 
         # Ports
-        exposed_ports = _get_exposed_ports(meta.get("labels", {}),
-                                           container.get("ports", []),
+        exposed_ports = _get_exposed_ports(meta.get("labels") or {},
+                                           container.get("ports") or [],
                                            ctx.services_by_selector)
         if exposed_ports:
             svc["ports"] = exposed_ports
@@ -731,13 +745,13 @@ def _get_exposed_ports(workload_labels: dict, container_ports: list,
     """Determine which ports to expose based on K8s Service type."""
     ports = []
     for _sel_key, svc_info in services_by_selector.items():
-        svc_labels = svc_info.get("selector", {})
+        svc_labels = svc_info.get("selector") or {}
         if not svc_labels:
             continue
         if all(workload_labels.get(k) == v for k, v in svc_labels.items()):
             svc_type = svc_info.get("type", "ClusterIP")
             if svc_type in ("NodePort", "LoadBalancer"):
-                for sp in svc_info.get("ports", []):
+                for sp in svc_info.get("ports") or []:
                     target = sp.get("targetPort", sp.get("port"))
                     if isinstance(target, str):
                         target = _resolve_named_port(target, container_ports)
@@ -755,7 +769,7 @@ def _index_workloads(manifests: dict) -> list[tuple[dict, str]]:
     for kind in WORKLOAD_KINDS:
         for m in manifests.get(kind, []):
             meta = m.get("metadata", {})
-            result.append((meta.get("labels", {}), meta.get("name", "")))
+            result.append((meta.get("labels") or {}, meta.get("name", "")))
     return result
 
 
@@ -828,7 +842,7 @@ def _resolve_secret_keys(secret: dict, items: list | None) -> list[tuple[str, st
     if items:
         keys = [item["key"] for item in items if "key" in item]
     else:
-        keys = list(secret.get("data", {}).keys()) + list(secret.get("stringData", {}).keys())
+        keys = list((secret.get("data") or {}).keys()) + list((secret.get("stringData") or {}).keys())
     result = []
     for key in keys:
         out_name = key
@@ -940,7 +954,7 @@ def _convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: se
             if cm is None:
                 warnings.append(f"ConfigMap '{source['name']}' referenced by {workload_name} not found")
                 continue
-            cm_dir = _generate_configmap_files(source["name"], cm.get("data", {}),
+            cm_dir = _generate_configmap_files(source["name"], cm.get("data") or {},
                                                output_dir, generated_cms, warnings,
                                                replacements=replacements,
                                                service_port_map=service_port_map)
@@ -998,7 +1012,8 @@ def _build_service_port_map(manifests: dict, services_by_selector: dict) -> dict
     for kind in WORKLOAD_KINDS:
         for m in manifests.get(kind, []):
             name = m.get("metadata", {}).get("name", "")
-            containers = m.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+            containers = ((m.get("spec") or {}).get("template") or {}).get("spec") or {}
+            containers = containers.get("containers") or []
             all_ports = []
             for c in containers:
                 all_ports.extend(c.get("ports", []))
@@ -1079,10 +1094,10 @@ def get_ingress_class(manifest: dict,
     If *ingress_types* is provided, custom class names are resolved to
     canonical rewriter names (e.g. ``haproxy-internal`` → ``haproxy``).
     """
-    spec = manifest.get("spec", {})
+    spec = manifest.get("spec") or {}
     cls = spec.get("ingressClassName", "")
     if not cls:
-        cls = manifest.get("metadata", {}).get("annotations", {}).get(
+        cls = ((manifest.get("metadata") or {}).get("annotations") or {}).get(
             "kubernetes.io/ingress.class", "")
     cls = cls.lower()
     if ingress_types and cls in ingress_types:
@@ -1111,6 +1126,15 @@ def resolve_backend(path_entry: dict, manifest: dict,
     compose_name = ctx.alias_map.get(svc_name, svc_name)
     container_port = ctx.service_port_map.get(
         (svc_name, svc_port), svc_port)
+    # Resolve well-known named ports that survived the lookup
+    if isinstance(container_port, str):
+        resolved = _WELL_KNOWN_PORTS.get(container_port)
+        if resolved is not None:
+            container_port = resolved
+        else:
+            ctx.warnings.append(
+                f"Ingress backend {svc_name}: unresolved named port '{container_port}'")
+            container_port = 80
 
     svc_ns = ctx.services_by_selector.get(
         svc_name, {}).get("namespace", "") or ns
@@ -1142,14 +1166,14 @@ class HAProxyRewriter(IngressRewriter):
 
     def rewrite(self, manifest, ctx):
         entries = []
-        annotations = manifest.get("metadata", {}).get("annotations", {})
-        spec = manifest.get("spec", {})
+        annotations = (manifest.get("metadata") or {}).get("annotations") or {}
+        spec = manifest.get("spec") or {}
 
-        for rule in spec.get("rules", []):
+        for rule in spec.get("rules") or []:
             host = rule.get("host", "")
             if not host:
                 continue
-            for path_entry in rule.get("http", {}).get("paths", []):
+            for path_entry in (rule.get("http") or {}).get("paths") or []:
                 path = path_entry.get("path", "/")
                 backend = resolve_backend(path_entry, manifest, ctx)
 
@@ -1387,9 +1411,9 @@ def _index_manifests(manifests: dict) -> tuple[dict, dict, dict]:
         services_by_selector[svc_name] = {
             "name": svc_name,
             "namespace": svc_meta.get("namespace", ""),
-            "selector": svc_spec.get("selector", {}),
+            "selector": svc_spec.get("selector") or {},
             "type": svc_spec.get("type", "ClusterIP"),
-            "ports": svc_spec.get("ports", []),
+            "ports": svc_spec.get("ports") or [],
         }
     return configmaps, secrets, services_by_selector
 
@@ -1479,7 +1503,7 @@ def _preregister_pvcs(manifests: dict, config: dict) -> set[str]:
                     config.setdefault("volumes", {})[claim] = {"host_path": claim}
                     pvc_names.add(claim)
             # Regular PVC references in pod volumes
-            pod_vols = spec.get("template", {}).get("spec", {}).get("volumes") or []
+            pod_vols = ((spec.get("template") or {}).get("spec") or {}).get("volumes") or []
             for v in pod_vols:
                 pvc = v.get("persistentVolumeClaim", {})
                 claim = pvc.get("claimName", "")

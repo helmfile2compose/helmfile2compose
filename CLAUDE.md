@@ -13,6 +13,8 @@ Lint often: run `pylint helmfile2compose.py` and `pyflakes helmfile2compose.py` 
 
 Complexity: run `radon cc helmfile2compose.py -a -s -n C` to check cyclomatic complexity. Target: no D/E/F ratings. Current: 14 C-rated functions, average C (~14).
 
+**Null-safe YAML access:** `.get("key", {})` returns `None` when the key exists with an explicit `null` value (Helm conditional blocks). Always use `.get("key") or {}` / `.get("key") or []` for fields that Helm may render as null (`annotations`, `ports`, `initContainers`, `data`, `rules`, `selector`, etc.).
+
 ## What exists
 
 Single script `helmfile2compose.py` (~1860 lines). No packages, no setup.py. Dependency: `pyyaml`.

@@ -4,9 +4,8 @@
 import fnmatch
 
 from helmfile2compose.pacts.types import ConvertContext, ConvertResult
-from helmfile2compose.pacts.helpers import resolve_env
 from helmfile2compose.core.constants import WORKLOAD_KINDS
-from helmfile2compose.core.env import _convert_command
+from helmfile2compose.core.env import resolve_env, _convert_command
 from helmfile2compose.core.volumes import _convert_volume_mounts, _build_vol_map
 
 

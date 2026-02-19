@@ -1,7 +1,6 @@
 """Ingress rewriter base class and public helpers for extensions."""
 
-from helmfile2compose.core.constants import _WELL_KNOWN_PORTS
-from helmfile2compose.pacts.types import ConvertContext
+from helmfile2compose.pacts.types import ConvertContext, WELL_KNOWN_PORTS
 
 
 class IngressRewriter:
@@ -68,7 +67,7 @@ def resolve_backend(path_entry: dict, manifest: dict,
         (svc_name, svc_port), svc_port)
     # Resolve well-known named ports that survived the lookup
     if isinstance(container_port, str):
-        resolved = _WELL_KNOWN_PORTS.get(container_port)
+        resolved = WELL_KNOWN_PORTS.get(container_port)
         if resolved is not None:
             container_port = resolved
         else:

@@ -2,6 +2,9 @@
 
 from dataclasses import dataclass, field
 
+# Well-known named ports (used by resolve_backend in pacts/ingress.py)
+WELL_KNOWN_PORTS = {"http": 80, "https": 443, "grpc": 50051}
+
 
 @dataclass
 class ConvertContext:

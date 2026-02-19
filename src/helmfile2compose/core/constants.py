@@ -31,7 +31,6 @@ IGNORED_KINDS = (
 
 # K8s kinds that produce compose services (iterated together everywhere)
 WORKLOAD_KINDS = ("DaemonSet", "Deployment", "Job", "StatefulSet")
-_WELL_KNOWN_PORTS = {"http": 80, "https": 443, "grpc": 50051}
 
 # Kinds indexed during pre-processing (not dispatched to converters)
 _INDEXED_KINDS = {"ConfigMap", "Secret", "Service", "PersistentVolumeClaim"}

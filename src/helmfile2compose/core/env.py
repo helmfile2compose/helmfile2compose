@@ -188,6 +188,25 @@ def _rewrite_env_values(env_vars: list[dict],
                 ev["value"] = transform(ev["value"])
 
 
+def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str, dict],
+                workload_name: str, warnings: list[str],
+                replacements: list[dict] | None = None,
+                service_port_map: dict | None = None) -> list[dict]:
+    """Resolve env and envFrom into a flat list of {name: ..., value: ...}."""
+    env_vars: list[dict] = []
+
+    for e in (container.get("env") or []):
+        resolved = _resolve_env_entry(e, configmaps, secrets, workload_name, warnings)
+        if resolved:
+            env_vars.append(resolved)
+
+    env_vars.extend(_resolve_envfrom(container.get("envFrom") or [], configmaps, secrets))
+
+    _rewrite_env_values(env_vars, replacements=replacements,
+                        service_port_map=service_port_map)
+    return env_vars
+
+
 def _convert_command(container: dict, env_dict: dict[str, str]) -> dict:
     """Convert K8s command/args to compose entrypoint/command with variable resolution."""
     result = {}

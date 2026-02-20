@@ -1,12 +1,12 @@
-# h2c-core
+# helmfile2compose
 
 ![vibe coded](https://img.shields.io/badge/vibe-coded-ff69b4)
 ![python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB)
-![heresy: 9/10](https://img.shields.io/badge/heresy-9%2F10-8b0000)
+![heresy: 0/0](https://img.shields.io/badge/heresy-0%2F0-black)
 ![deity: Yog Sa'rath](https://img.shields.io/badge/deity-Yog%20Sa'rath-8b0000)
 ![public domain](https://img.shields.io/badge/license-public%20domain-brightgreen)
 
-*The core converter script for [helmfile2compose](https://github.com/helmfile2compose). Patient zero.*
+*The full distribution. Patient zero, fully armed.*
 
 This is where it started — a single Python script, born from the unholy request to make Kubernetes run without Kubernetes. It worked. That was the worst possible outcome. From this aberration, an [entire ecosystem](https://github.com/helmfile2compose) grew: a package manager, CRD extensions, documentation — a temple built for the sole purpose of dismantling a greater and more beautiful one.
 

@@ -109,9 +109,9 @@ def collect_imports_and_body(path: Path) -> tuple[list[str], list[str]]:
 def fetch_core_release(version: str = "latest") -> str:
     """Download h2c.py from the h2c-core GitHub releases."""
     if version == "latest":
-        url = "https://github.com/helmfile2compose/helmfile2compose/releases/latest/download/h2c.py"
+        url = "https://github.com/helmfile2compose/h2c-core/releases/latest/download/h2c.py"
     else:
-        url = f"https://github.com/helmfile2compose/helmfile2compose/releases/download/{version}/h2c.py"
+        url = f"https://github.com/helmfile2compose/h2c-core/releases/download/{version}/h2c.py"
     print(f"Fetching h2c.py from {url}", file=sys.stderr)
     try:
         with urllib.request.urlopen(url) as resp:

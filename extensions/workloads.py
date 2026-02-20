@@ -130,7 +130,7 @@ class WorkloadConverter(Provider):
     """Convert DaemonSet, Deployment, Job, StatefulSet manifests to compose services."""
     name = "workloads"
     kinds = list(WORKLOAD_KINDS)
-    priority = 50
+    priority = 500
 
     def convert(self, kind: str, manifests: list[dict], ctx: ConvertContext) -> ConvertResult:
         """Convert all manifests of the given workload kind."""

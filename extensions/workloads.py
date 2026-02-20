@@ -3,23 +3,16 @@
 
 import fnmatch
 
-from helmfile2compose.pacts.types import ConvertContext, ConvertResult
+from helmfile2compose.pacts.types import ConvertContext, ConvertResult, Provider
 from helmfile2compose.core.constants import WORKLOAD_KINDS
 from helmfile2compose.core.env import resolve_env, _convert_command
 from helmfile2compose.core.volumes import _convert_volume_mounts, _build_vol_map
+from helmfile2compose.core.services import _resolve_named_port
 
 
 def _is_excluded(name: str, exclude_list: list[str]) -> bool:
     """Check if a workload name matches any exclude pattern (supports wildcards)."""
     return any(fnmatch.fnmatch(name, pattern) for pattern in exclude_list)
-
-
-def _resolve_named_port(name: str, container_ports: list) -> int | str:
-    """Resolve a named port (e.g. 'http') to its numeric containerPort."""
-    for cp in container_ports:
-        if cp.get("name") == name:
-            return cp["containerPort"]
-    return name  # fallback: return as-is if not found
 
 
 def _get_run_as_user(pod_spec: dict, container: dict) -> int | None:
@@ -133,9 +126,11 @@ def _convert_sidecar_containers(pod_spec: dict, name: str, ctx: ConvertContext,
     return result
 
 
-class WorkloadConverter:
+class WorkloadConverter(Provider):
     """Convert DaemonSet, Deployment, Job, StatefulSet manifests to compose services."""
+    name = "workloads"
     kinds = list(WORKLOAD_KINDS)
+    priority = 50
 
     def convert(self, kind: str, manifests: list[dict], ctx: ConvertContext) -> ConvertResult:
         """Convert all manifests of the given workload kind."""

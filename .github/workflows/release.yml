@@ -20,8 +20,8 @@ jobs:
       - name: Install dependencies
         run: pip install pyyaml
 
-      - name: Build single-file distribution
-        run: python build.py
+      - name: Build distribution
+        run: python build.py --core-version ${{ github.event.release.tag_name }}
 
       - name: Upload release asset
         env:

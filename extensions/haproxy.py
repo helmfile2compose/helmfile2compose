@@ -42,11 +42,15 @@ class HAProxyRewriter(IngressRewriter):
             for path_entry in (rule.get("http") or {}).get("paths") or []:
                 backend = resolve_backend(path_entry, manifest, ctx)
                 ssl = _resolve_backend_ssl(annotations)
+                path = path_entry.get("path", "/")
+                strip = self._extract_strip_prefix(annotations)
+                if strip and not path.startswith(strip):
+                    strip = None
                 entries.append({
                     "host": host,
-                    "path": path_entry.get("path", "/"),
+                    "path": path,
                     "upstream": backend["upstream"],
-                    "strip_prefix": self._extract_strip_prefix(annotations),
+                    "strip_prefix": strip,
                     **ssl,
                 })
         return entries

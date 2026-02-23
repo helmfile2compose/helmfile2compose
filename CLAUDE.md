@@ -1,15 +1,15 @@
 # helmfile2compose (distribution)
 
-The full distribution of [helmfile2compose](https://github.com/helmfile2compose) — h2c-core + 7 built-in extensions, concatenated into a single `helmfile2compose.py`.
+The full distribution of [helmfile2compose](https://github.com/helmfile2compose) — h2c-core + 8 bundled extensions, concatenated into a single `helmfile2compose.py`.
 
 ## What this repo is
 
-This is not the core engine — that's [h2c-core](https://github.com/helmfile2compose/h2c-core). This repo contains the **extensions** that make h2c useful out of the box, and the CI workflow that assembles them into a distribution.
+This is not the core engine — that's [h2c-core](https://github.com/helmfile2compose/h2c-core). This repo is the distribution manifest — `distribution.json` + CI workflow that assembles core + bundled extensions into a single script.
 
-## Built-in extensions
+## The Eight Monks
 
-| Future repo | Type | File | Purpose |
-|-------------|------|------|---------|
+| Repo | Type | File | Purpose |
+|------|------|------|---------|
 | h2c-indexer-configmap | IndexerConverter | `configmap_indexer.py` | Populates `ctx.configmaps` |
 | h2c-indexer-secret | IndexerConverter | `secret_indexer.py` | Populates `ctx.secrets` |
 | h2c-indexer-pvc | IndexerConverter | `pvc_indexer.py` | Populates `ctx.pvc_names` |
@@ -17,6 +17,7 @@ This is not the core engine — that's [h2c-core](https://github.com/helmfile2co
 | h2c-converter-workload | Provider | `workloads.py` | DaemonSet, Deployment, Job, StatefulSet → compose services |
 | h2c-rewriter-haproxy | IngressRewriter | `haproxy.py` | HAProxy annotations + default fallback |
 | h2c-provider-caddy | IngressProvider | `caddy.py` | Caddy service + Caddyfile generation |
+| h2c-transform-fix-permissions | Transform | `fix_permissions.py` | Fix bind mount permissions for non-root containers |
 
 Extensions import from `h2c` (e.g. `from h2c.core.ingress import IngressProvider`). At build time, these imports are stripped — everything lives in one namespace in the concatenated output.
 

@@ -7,6 +7,7 @@
     "simple-service-indexer",
     "workload",
     "haproxy",
-    "caddy"
+    "caddy",
+    "fix-permissions"
   ]
 }

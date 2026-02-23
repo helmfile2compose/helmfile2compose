@@ -4,7 +4,7 @@
     "configmap-indexer",
     "secret-indexer",
     "pvc-indexer",
-    "simple-service-indexer",
+    "service-indexer",
     "workload",
     "haproxy",
     "caddy",

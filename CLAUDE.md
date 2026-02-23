@@ -14,7 +14,7 @@ This is not the core engine — that's [h2c-core](https://github.com/helmfile2co
 | h2c-indexer-secret | IndexerConverter | `secret_indexer.py` | Populates `ctx.secrets` |
 | h2c-indexer-pvc | IndexerConverter | `pvc_indexer.py` | Populates `ctx.pvc_names` |
 | h2c-indexer-service | IndexerConverter | `service_indexer.py` | Populates `ctx.services_by_selector` |
-| h2c-converter-workload | Provider | `workloads.py` | DaemonSet, Deployment, Job, StatefulSet → compose services |
+| h2c-provider-simple-workload | Provider | `workloads.py` | DaemonSet, Deployment, Job, StatefulSet → compose services |
 | h2c-rewriter-haproxy | IngressRewriter | `haproxy.py` | HAProxy annotations + default fallback |
 | h2c-provider-caddy | IngressProvider | `caddy.py` | Caddy service + Caddyfile generation |
 | h2c-transform-fix-permissions | Transform | `fix_permissions.py` | Fix bind mount permissions for non-root containers |

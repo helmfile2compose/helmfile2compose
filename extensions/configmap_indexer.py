@@ -1,6 +1,6 @@
 """ConfigMap indexer — populates ctx.configmaps."""
 
-from h2c.pacts.types import ConvertResult, IndexerConverter
+from h2c import ConverterResult, IndexerConverter
 
 
 class ConfigMapIndexer(IndexerConverter):
@@ -14,4 +14,4 @@ class ConfigMapIndexer(IndexerConverter):
             name = meta.get("name", "")
             if name:
                 ctx.configmaps[name] = m
-        return ConvertResult()
+        return ConverterResult()

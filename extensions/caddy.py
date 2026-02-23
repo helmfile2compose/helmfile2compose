@@ -3,7 +3,7 @@
 import os
 import sys
 
-from h2c.core.ingress import IngressProvider
+from h2c import IngressProvider
 
 
 class CaddyProvider(IngressProvider):
@@ -43,11 +43,11 @@ class CaddyProvider(IngressProvider):
 
         # Extension config with fallback to top-level caddy_* keys for retrocompat
         ext_cfg = config.get("extensions", {}).get(self.name, {})
-        caddy_email = ext_cfg.get("email") or config.get("caddy_email")
-        tls_internal = bool(ext_cfg.get("tls_internal") or config.get("caddy_tls_internal"))
+        caddy_email = ext_cfg.get("email")
+        tls_internal = bool(ext_cfg.get("tls_internal"))
 
         filename = "Caddyfile"
-        if config.get("disableCaddy"):
+        if config.get("disable_ingress"):
             project = config.get("name", "project")
             filename = f"Caddyfile-{project}"
 

@@ -3,11 +3,14 @@
 
 import fnmatch
 
-from h2c.pacts.types import ConvertContext, ConvertResult, Provider
-from h2c.core.constants import WORKLOAD_KINDS
-from h2c.core.env import resolve_env, _convert_command
-from h2c.core.volumes import _convert_volume_mounts, _build_vol_map
-from h2c.core.services import _resolve_named_port
+from h2c import (
+    ConvertContext, ProviderResult, Provider,
+    resolve_env, _convert_command,
+    _convert_volume_mounts, _build_vol_map,
+    _resolve_named_port,
+)
+
+_WORKLOAD_KINDS = ("DaemonSet", "Deployment", "Job", "StatefulSet")
 
 
 def _is_excluded(name: str, exclude_list: list[str]) -> bool:
@@ -129,10 +132,10 @@ def _convert_sidecar_containers(pod_spec: dict, name: str, ctx: ConvertContext,
 class WorkloadConverter(Provider):
     """Convert DaemonSet, Deployment, Job, StatefulSet manifests to compose services."""
     name = "workloads"
-    kinds = list(WORKLOAD_KINDS)
+    kinds = list(_WORKLOAD_KINDS)
     priority = 500
 
-    def convert(self, kind: str, manifests: list[dict], ctx: ConvertContext) -> ConvertResult:
+    def convert(self, kind: str, manifests: list[dict], ctx: ConvertContext) -> ProviderResult:
         """Convert all manifests of the given workload kind."""
         services = {}
         restart = "on-failure" if kind == "Job" else "always"
@@ -140,7 +143,7 @@ class WorkloadConverter(Provider):
             result = self._convert_one(m, ctx, restart_policy=restart)
             if result:
                 services.update(result)
-        return ConvertResult(services=services)
+        return ProviderResult(services=services)
 
     def _convert_one(self, manifest: dict, ctx: ConvertContext,
                      restart_policy: str = "always") -> dict | None:

@@ -1,0 +1,12 @@
+{
+  "base": "core",
+  "extensions": [
+    "configmap-indexer",
+    "secret-indexer",
+    "pvc-indexer",
+    "simple-service-indexer",
+    "workload",
+    "haproxy",
+    "caddy"
+  ]
+}

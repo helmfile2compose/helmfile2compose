@@ -1,7 +1,6 @@
 """Service indexer — populates ctx.services_by_selector, ctx.alias_map, ctx.service_port_map."""
 
-from h2c.pacts.types import ConvertResult, IndexerConverter
-from h2c.core.services import _build_alias_map, _build_service_port_map
+from h2c import ConverterResult, IndexerConverter, _build_alias_map, _build_service_port_map
 
 
 class ServiceIndexer(IndexerConverter):
@@ -24,4 +23,4 @@ class ServiceIndexer(IndexerConverter):
         ctx.alias_map.update(_build_alias_map(ctx.manifests, ctx.services_by_selector))
         ctx.service_port_map.update(
             _build_service_port_map(ctx.manifests, ctx.services_by_selector))
-        return ConvertResult()
+        return ConverterResult()

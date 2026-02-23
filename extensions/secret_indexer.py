@@ -1,6 +1,6 @@
 """Secret indexer — populates ctx.secrets."""
 
-from h2c.pacts.types import ConvertResult, IndexerConverter
+from h2c import ConverterResult, IndexerConverter
 
 
 class SecretIndexer(IndexerConverter):
@@ -14,4 +14,4 @@ class SecretIndexer(IndexerConverter):
             name = meta.get("name", "")
             if name:
                 ctx.secrets[name] = m
-        return ConvertResult()
+        return ConverterResult()

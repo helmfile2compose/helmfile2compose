@@ -2,7 +2,7 @@
 
 import re
 
-from h2c.pacts.ingress import IngressRewriter, get_ingress_class, resolve_backend
+from h2c import IngressRewriter, get_ingress_class, resolve_backend
 
 
 def _resolve_backend_ssl(annotations: dict) -> dict:
@@ -23,7 +23,7 @@ class HAProxyRewriter(IngressRewriter):
     name = "haproxy"
 
     def match(self, manifest, ctx):
-        ingress_types = ctx.config.get("ingressTypes", {})
+        ingress_types = ctx.config.get("ingress_types") or {}
         cls = get_ingress_class(manifest, ingress_types)
         if cls in ("haproxy", ""):
             return True

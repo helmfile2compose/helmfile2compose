@@ -1,8 +1,15 @@
 """PVC indexer — pre-registers PersistentVolumeClaim and workload PVC references."""
 
-from h2c.pacts.types import ConvertResult, IndexerConverter
-from h2c.core.constants import WORKLOAD_KINDS
-from h2c.core.volumes import _register_pvc
+from h2c import ConverterResult, IndexerConverter
+
+_WORKLOAD_KINDS = ("DaemonSet", "Deployment", "Job", "StatefulSet")
+
+
+def _register_pvc(claim, config, pvc_names):
+    """Register a single PVC claim in config if not already present."""
+    if claim and claim not in config.get("volumes", {}):
+        config.setdefault("volumes", {})[claim] = {"host_path": claim}
+        pvc_names.add(claim)
 
 
 class PVCIndexer(IndexerConverter):
@@ -16,7 +23,7 @@ class PVCIndexer(IndexerConverter):
             claim = m.get("metadata", {}).get("name", "")
             _register_pvc(claim, ctx.config, ctx.pvc_names)
         # Scan workload manifests for volumeClaimTemplates and persistentVolumeClaim refs
-        for wl_kind in WORKLOAD_KINDS:
+        for wl_kind in _WORKLOAD_KINDS:
             for m in ctx.manifests.get(wl_kind, []):
                 spec = m.get("spec") or {}
                 for vct in spec.get("volumeClaimTemplates") or []:
@@ -26,4 +33,4 @@ class PVCIndexer(IndexerConverter):
                 for v in pod_vols:
                     pvc = v.get("persistentVolumeClaim") or {}
                     _register_pvc(pvc.get("claimName", ""), ctx.config, ctx.pvc_names)
-        return ConvertResult()
+        return ConverterResult()

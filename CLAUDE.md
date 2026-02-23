@@ -28,7 +28,7 @@ python ../h2c-core/build-distribution.py helmfile2compose \
   --extensions-dir extensions --core-dir ../h2c-core
 # → helmfile2compose.py
 
-# CI mode (fetches h2c.py from latest h2c-core release)
+# CI mode (fetches h2c.py from h2c-core release, build-distribution.py from repo)
 python build-distribution.py helmfile2compose --extensions-dir extensions
 # → helmfile2compose.py
 ```

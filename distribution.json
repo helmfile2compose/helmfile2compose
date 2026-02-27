@@ -1,5 +1,5 @@
 {
-  "base": "core",
+  "base": "engine",
   "extensions": [
     "configmap-indexer",
     "secret-indexer",

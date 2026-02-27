@@ -8,13 +8,13 @@
 
 *The full distribution. Patient zero, fully armed.*
 
-This is where it started — a single Python script, born from the unholy request to make Kubernetes run without Kubernetes. It worked. That was the worst possible outcome. From this aberration, an [entire ecosystem](https://github.com/helmfile2compose) grew: a package manager, CRD extensions, documentation — a temple built for the sole purpose of dismantling a greater and more beautiful one.
+This is where it started — a single Python script, born from the unholy request to make Kubernetes run without Kubernetes. It worked. That was the worst possible outcome. From this aberration, an [entire ecosystem](https://dekube.io) grew: a package manager, CRD extensions, documentation — a temple built for the sole purpose of dismantling a greater and more beautiful one.
 
 Core of the problem: feed it Kubernetes manifests (from `helmfile template`, `helm template`, `kustomize build`, whatever produced them) and it will spit out a `compose.yml` and a `Caddyfile`. Not Kubernetes-in-Docker — no cluster, no kubelet, no shim. Plain `docker compose up`.
 
 ## Quick start
 
-Download `helmfile2compose.py` from the [latest release](https://github.com/helmfile2compose/helmfile2compose/releases/latest).
+Download `helmfile2compose.py` from the [latest release](https://github.com/dekubeio/helmfile2compose/releases/latest).
 
 ```bash
 # Convert from helmfile
@@ -26,7 +26,7 @@ python3 helmfile2compose.py --from-dir /tmp/rendered --output-dir .
 docker compose up -d
 ```
 
-If your stack uses CRDs (Keycloak, cert-manager, trust-manager), grab the extension `.py` files from their repos, drop them in a directory, and pass `--extensions-dir` to the script. For managing extensions and automating downloads, see [h2c-manager](https://github.com/helmfile2compose/h2c-manager).
+If your stack uses CRDs (Keycloak, cert-manager, trust-manager), grab the extension `.py` files from their repos, drop them in a directory, and pass `--extensions-dir` to the script. For managing extensions and automating downloads, see [dekube-manager](https://github.com/dekubeio/dekube-manager).
 
 ## Requirements
 
@@ -47,42 +47,42 @@ If your stack uses CRDs (Keycloak, cert-manager, trust-manager), grab the extens
 
 Init containers, sidecars, fix-permissions services, and hostname truncation are handled automatically.
 
-CRDs (Keycloak, cert-manager, trust-manager) are handled by [external extensions](https://helmfile2compose.github.io/extensions/) via `--extensions-dir`.
+CRDs (Keycloak, cert-manager, trust-manager) are handled by [external extensions](https://docs.dekube.io/extensions/) via `--extensions-dir`.
 
 ## Output files
 
 - `compose.yml` — services, volumes
 - `Caddyfile` — reverse proxy config from Ingress manifests
-- `helmfile2compose.yaml` — persistent config (volumes, excludes, overrides)
+- `dekube.yaml` — persistent config (volumes, excludes, overrides)
 - `configmaps/` / `secrets/` — generated files from volume mounts
 
 ## Development
 
-This repo contains built-in extensions under `extensions/`. The core engine lives in [h2c-core](https://github.com/helmfile2compose/h2c-core) (`src/h2c/`). The single-file `helmfile2compose.py` is a build artifact — h2c-core + extensions concatenated by `build-distribution.py`.
+This repo contains built-in extensions under `extensions/`. The core engine lives in [dekube-engine](https://github.com/dekubeio/dekube-engine) (`src/dekube/`). The single-file `helmfile2compose.py` is a build artifact — dekube-engine + extensions concatenated by `build-distribution.py`.
 
 ```bash
 # Build locally (reads core sources from sibling checkout)
-python ../h2c-core/build-distribution.py helmfile2compose \
-  --extensions-dir extensions --core-dir ../h2c-core
+python ../dekube-engine/build-distribution.py helmfile2compose \
+  --extensions-dir extensions --core-dir ../dekube-engine
 # → helmfile2compose.py
 
 # Test it
 python helmfile2compose.py --from-dir /tmp/rendered --output-dir .
 ```
 
-See the [distributions docs](https://helmfile2compose.github.io/developer/distributions/) and [core architecture](https://helmfile2compose.github.io/developer/core-architecture/) for the full picture.
+See the [distributions docs](https://docs.dekube.io/distributions/) and [core architecture](https://docs.dekube.io/architecture/) for the full picture.
 
 ## Documentation
 
-Full docs at [helmfile2compose.github.io](https://helmfile2compose.github.io).
+Full docs at [docs.dekube.io](https://docs.dekube.io).
 
 ## Related repos
 
 | Repo | Description |
 |------|-------------|
-| [h2c-core](https://github.com/helmfile2compose/h2c-core) | Bare conversion engine (`h2c.py`) |
-| [h2c-manager](https://github.com/helmfile2compose/h2c-manager) | Package manager + extension registry |
-| [helmfile2compose.github.io](https://github.com/helmfile2compose/helmfile2compose.github.io) | Documentation site |
+| [dekube-engine](https://github.com/dekubeio/dekube-engine) | Bare conversion engine (`dekube.py`) |
+| [dekube-manager](https://github.com/dekubeio/dekube-manager) | Package manager + extension registry |
+| [dekube-docs](https://github.com/dekubeio/dekube-docs) | Documentation site |
 
 ## License
 

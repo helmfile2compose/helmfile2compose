@@ -23,14 +23,14 @@ jobs:
       - name: Fetch build tools
         run: |
           curl -fsSL -o build-distribution.py \
-            https://raw.githubusercontent.com/helmfile2compose/h2c-core/main/build-distribution.py
-          curl -fsSL -o h2c-manager.py \
-            https://raw.githubusercontent.com/helmfile2compose/h2c-manager/main/h2c-manager.py
+            https://raw.githubusercontent.com/dekubeio/dekube-engine/main/build-distribution.py
+          curl -fsSL -o dekube-manager.py \
+            https://raw.githubusercontent.com/dekubeio/dekube-manager/main/dekube-manager.py
 
       - name: Fetch extensions
         run: |
           extensions=$(python -c "import json; print(' '.join(json.load(open('distribution.json'))['extensions']))")
-          python h2c-manager.py --no-distribution -d .build $extensions
+          python dekube-manager.py --no-distribution -d .build $extensions
 
       - name: Build distribution
         run: python build-distribution.py helmfile2compose --extensions-dir .build/extensions

@@ -10,7 +10,7 @@
 
 This is where it started — a single Python script, born from the unholy request to make Kubernetes run without Kubernetes. It worked. That was the worst possible outcome. From this aberration, an [entire ecosystem](https://dekube.io) grew: a package manager, CRD extensions, documentation — a temple built for the sole purpose of dismantling a greater and more beautiful one.
 
-Core of the problem: feed it Kubernetes manifests (from `helmfile template`, `helm template`, `kustomize build`, whatever produced them) and it will spit out a `compose.yml` and a `Caddyfile`. Not Kubernetes-in-Docker — no cluster, no kubelet, no shim. Plain `docker compose up`.
+Core of the problem: feed it Kubernetes manifests (from `helmfile template`, `helm template`, `kustomize build`, whatever produced them) and it will spit out a `compose.yml` + whatever configfile your proxy server will use. Not Kubernetes-in-Docker — no cluster, no kubelet, no shim. Plain `docker compose up`.
 
 ## Quick start
 
